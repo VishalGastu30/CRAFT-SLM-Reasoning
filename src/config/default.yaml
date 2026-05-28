@@ -6,7 +6,8 @@ probe:
   n_questions: 200
   temperature: 0.8
   sampling_fractions:
-    gsm8k: 0.4        # 80 questions
+    gsm8k: 0.1        # 10%
+    aqua_rat: 0.1     # 10%
     strategyqa: 0.3   # 60 questions
     mmlu: 0.3         # 60 questions
 
