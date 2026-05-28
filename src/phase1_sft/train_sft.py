@@ -85,7 +85,7 @@ def train_sft(config_name="phi3_mini", hardware_name="kaggle", output_dir="check
         model = AutoModelForCausalLM.from_pretrained(
             sft_cfg.model_name_or_path,
             quantization_config=bnb_config,
-            device_map="auto",
+            device_map={"": 0},
             trust_remote_code=True
         )
         model = prepare_model_for_kbit_training(model)
