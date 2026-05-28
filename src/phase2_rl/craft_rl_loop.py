@@ -110,7 +110,7 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
             base_model_name,
             quantization_config=bnb_config,
             device_map="auto",
-            trust_remote_code=True
+            trust_remote_code=False
         )
         model = prepare_model_for_kbit_training(model)
         
@@ -119,12 +119,12 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
             base_model_name,
             quantization_config=bnb_config,
             device_map="auto",
-            trust_remote_code=True
+            trust_remote_code=False
         )
         ref_model.eval()
     else:
         logger.warning("No CUDA device detected. Running RL loop on CPU (mock mode).")
-        model = AutoModelForCausalLM.from_pretrained(base_model_name, device_map="cpu", trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(base_model_name, device_map="cpu", trust_remote_code=False)
         ref_model = None
 
     # Load the Phase 1 SFT Adapter correctly so we can continue training it
