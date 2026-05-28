@@ -140,7 +140,7 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
         ref_model.eval()
     else:
         logger.warning("No CUDA device detected. Running RL loop on CPU (mock mode).")
-        model = AutoModelForCausalLM.from_pretrained(base_model_name, device_map="cpu", trust_remote_code=False)
+        model = AutoModelForCausalLM.from_pretrained(base_model_name, device_map="cpu", trust_remote_code=True)
         ref_model = None
 
     # Load the Phase 1 SFT Adapter correctly so we can continue training it
@@ -155,7 +155,7 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
         lora_config = LoraConfig(
             r=raw_config.get("sft", {}).get("lora_rank", 64),
             lora_alpha=raw_config.get("sft", {}).get("lora_alpha", 128),
-            target_modules=raw_config.get("sft", {}).get("target_modules", ["q_proj", "v_proj"]),
+            target_modules=raw_config.get("sft", {}).get("target_modules", ["qkv_proj", "o_proj"]),
             bias="none",
             task_type="CAUSAL_LM"
         )
@@ -211,7 +211,8 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
                     max_new_tokens=256,
                     do_sample=True,
                     temperature=temperature,
-                    pad_token_id=tokenizer.eos_token_id
+                    pad_token_id=tokenizer.eos_token_id,
+                    use_cache=False
                 )
                 response = tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
                 group_responses.append(response)
