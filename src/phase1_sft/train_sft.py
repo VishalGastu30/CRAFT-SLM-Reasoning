@@ -53,7 +53,7 @@ def train_sft(config_name="phi3_mini", hardware_name="kaggle", output_dir="check
     sft_cfg = SFTConfig(
         model_name_or_path=raw_config["model"]["name"],
         max_seq_length=raw_config["model"]["max_seq_length"],
-        gsm_fraction=raw_config["probe"]["sampling_fractions"].get("gsm8k", 0.6),
+        gsm8k_fraction=raw_config["probe"]["sampling_fractions"].get("gsm8k", 0.6),
         aqua_fraction=raw_config["probe"]["sampling_fractions"].get("aqua_rat", 0.4),
         epochs=raw_config["sft"].get("epochs", 3),
         learning_rate=float(raw_config["sft"].get("learning_rate", 2e-4)),
