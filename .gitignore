@@ -160,3 +160,14 @@ logs/
 *.pt
 *.pth
 .DS_Store
+
+# CRAFT Plans and Sensitive Info
+CRAFT_Master_Plan.md
+CRAFT_Execution_Plan.md
+CRAFT_Master_Plan.pdf
+*Plan.md
+*Plan.pdf
+*.key
+*.pem
+credentials*
+secret*
