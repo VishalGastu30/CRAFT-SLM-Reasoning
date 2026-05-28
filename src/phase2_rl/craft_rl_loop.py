@@ -13,6 +13,43 @@ from src.config import load_config
 from src.phase2_rl.reward_combiner import RewardCombiner
 from src.phase2_rl.component_c.curriculum_engine import CurriculumEngine
 from src.phase2_rl.component_c.kl_controller import KLController
+from src.phase2_rl.component_b.trace_generator import TraceGenerator
+from src.phase2_rl.component_b.contrastive_builder import ContrastiveBuilder
+from src.phase2_rl.component_b.dpo_trainer import StepDPOTrainer
+
+def compute_seq_logps(model, tokenizer, prompt: str, response: str) -> torch.Tensor:
+    """
+    Computes the log probabilities of the tokens in the response
+    conditioned on the prompt prefix.
+    """
+    device = model.device
+    full_text = prompt + response
+    full_inputs = tokenizer(full_text, return_tensors="pt").to(device)
+    prompt_inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    
+    full_ids = full_inputs.input_ids
+    prompt_len = prompt_inputs.input_ids.shape[1]
+    
+    # Forward pass
+    with torch.set_grad_enabled(model.training):
+        outputs = model(full_ids)
+        logits = outputs.logits
+        
+    # Shift logits and labels
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = full_ids[..., 1:].contiguous()
+    
+    # Slice response part
+    resp_logits = shift_logits[:, prompt_len - 1:]
+    resp_labels = shift_labels[:, prompt_len - 1:]
+    
+    # Calculate log-softmax
+    log_probs = torch.nn.functional.log_softmax(resp_logits, dim=-1)
+    
+    # Gather actual label log probabilities
+    per_token_logps = torch.gather(log_probs, dim=-1, index=resp_labels.unsqueeze(-1)).squeeze(-1)
+    
+    return per_token_logps.sum(dim=-1)
 
 def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkpoints/rl", resume=False):
     """Main orchestrator for CRAFT Phase 2 Reinforcement Learning Loop."""
@@ -39,6 +76,10 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
         kl_target=rl_cfg.get("kl_target", 0.1)
     )
     combiner = RewardCombiner()
+    
+    # Component B: Step-level DPO components
+    contrastive_builder = ContrastiveBuilder()
+    dpo_trainer = StepDPOTrainer(beta=rl_cfg.get("dpo_beta", 0.1))
     
     # 2. Load model and tokenizer (resuming from Phase 1 SFT final checkpoint)
     sft_model_path = "checkpoints/sft/final"
@@ -180,24 +221,131 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
         mean_success = np.mean(group_successes)
         curriculum.update_accuracy(mean_success)
         
-        # F. Policy Gradient Weight Update (Mocked for CPU, functional on GPU)
-        # Compute dynamic KL
-        simulated_kl = float(np.random.uniform(0.02, 0.15))
-        kl_beta = kl_controller.step(simulated_kl)
+        # F. Policy Gradient Weight Update
+        total_loss = None
+        grpo_loss_val = 0.0
+        dpo_loss_val = 0.0
+        mean_kl = 0.0
         
         # Check if Component B is activated (Step DPO starts at step 100)
         component_b_active = step >= dpo_activation_step
         
+        if ref_model is not None:
+            # Active model is in training mode
+            model.train()
+            optimizer.zero_grad()
+            
+            # Compute GRPO loss
+            grpo_losses = []
+            kl_divs = []
+            
+            for idx, response in enumerate(group_responses):
+                advantage = group_advantages[idx]
+                
+                # Compute log probabilities under current policy
+                policy_logps = compute_seq_logps(model, tokenizer, prompt, response)
+                
+                # Compute log probabilities under reference model
+                with torch.no_grad():
+                    ref_logps = compute_seq_logps(ref_model, tokenizer, prompt, response)
+                    
+                # Approximate KL divergence
+                kl_div = (policy_logps - ref_logps).mean()
+                kl_divs.append(kl_div.item())
+                
+                # Actor loss: -advantage * policy_logps + kl_beta * kl_div
+                actor_loss = -advantage * policy_logps + kl_beta * kl_div
+                grpo_losses.append(actor_loss)
+                
+            grpo_loss = torch.stack(grpo_losses).mean()
+            grpo_loss_val = grpo_loss.item()
+            total_loss = grpo_loss
+            
+            # Compute KL metrics for controller
+            mean_kl = float(np.mean(kl_divs))
+            kl_beta = kl_controller.step(mean_kl)
+            
+            # Check and compute Component B (Step DPO)
+            if component_b_active:
+                traces = [{"trace_text": r} for r in group_responses]
+                # Build DPO-ready positive/negative step pairs
+                contrastive_pairs = contrastive_builder.build_step_pairs(
+                    question=question_text,
+                    traces=traces,
+                    ground_truth=ground_truth,
+                    dataset_name=dataset_name
+                )
+                
+                if contrastive_pairs:
+                    dpo_losses = []
+                    for pair in contrastive_pairs:
+                        dpo_loss = dpo_trainer.compute_dpo_loss(
+                            model=model,
+                            ref_model=ref_model,
+                            tokenizer=tokenizer,
+                            prompt=pair["prompt"],
+                            chosen=pair["chosen"],
+                            rejected=pair["rejected"]
+                        )
+                        dpo_losses.append(dpo_loss)
+                    
+                    dpo_loss_mean = torch.stack(dpo_losses).mean()
+                    dpo_loss_val = dpo_loss_mean.item()
+                    # Add DPO loss to total loss
+                    total_loss = total_loss + dpo_loss_mean
+                    
+            # Backward pass & Optimizer step
+            if total_loss is not None:
+                total_loss.backward()
+                # Clip gradients to prevent explosion
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                
+        else:
+            # CPU/Mock mode execution
+            simulated_kl = float(np.random.uniform(0.02, 0.15))
+            kl_beta = kl_controller.step(simulated_kl)
+            mean_kl = simulated_kl
+            grpo_loss_val = float(np.random.uniform(0.1, 0.5))
+            
+            # In CPU mock mode, we still want to run the full DPO builder and trainer 
+            # to verify correctness of the step-level DPO code pathways!
+            if component_b_active:
+                traces = [{"trace_text": r} for r in group_responses]
+                contrastive_pairs = contrastive_builder.build_step_pairs(
+                    question=question_text,
+                    traces=traces,
+                    ground_truth=ground_truth,
+                    dataset_name=dataset_name
+                )
+                
+                if contrastive_pairs:
+                    # Let's run a single DPO computation to test it end-to-end
+                    pair = contrastive_pairs[0]
+                    # We run it with gradient tracking disabled to keep it fast
+                    with torch.no_grad():
+                        mock_dpo_loss = dpo_trainer.compute_dpo_loss(
+                            model=model,
+                            ref_model=None,
+                            tokenizer=tokenizer,
+                            prompt=pair["prompt"],
+                            chosen=pair["chosen"],
+                            rejected=pair["rejected"]
+                        )
+                        dpo_loss_val = float(mock_dpo_loss.item())
+                        
         # 5. Logging and checkpointing
         if step % rl_cfg.get("logging_steps", 5) == 0:
             metrics_dict = {
                 "mean_reward": mean_reward,
                 "mean_success": mean_success,
-                "kl_divergence": simulated_kl,
+                "kl_divergence": mean_kl,
                 "kl_beta": kl_beta,
                 "curriculum_min": curriculum.min_difficulty,
                 "curriculum_max": curriculum.max_difficulty,
-                "component_b_active": 1.0 if component_b_active else 0.0
+                "component_b_active": 1.0 if component_b_active else 0.0,
+                "grpo_loss": grpo_loss_val,
+                "dpo_loss": dpo_loss_val
             }
             log_metrics(step, metrics_dict, phase="rl", component="GRPO")
             
