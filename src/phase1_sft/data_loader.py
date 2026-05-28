@@ -87,7 +87,7 @@ def format_aqua_target(rationale: str, options: str, correct_letter: str) -> str
         f"Final Answer: {correct_letter}"
     )
 
-def create_training_dataset(tokenizer, gsm_fraction=0.6, aqua_fraction=0.4, seed=42):
+def create_training_dataset(tokenizer, gsm8k_fraction=0.6, aqua_fraction=0.4, seed=42):
     """
     Loads, cleans, formats, and combines GSM8K and AQuA-RAT.
     """
@@ -98,7 +98,7 @@ def create_training_dataset(tokenizer, gsm_fraction=0.6, aqua_fraction=0.4, seed
     try:
         gsm8k = load_dataset("gsm8k", "main", split="train")
         # Sample based on fraction
-        num_gsm = int(len(gsm8k) * gsm_fraction)
+        num_gsm = int(len(gsm8k) * gsm8k_fraction)
         gsm8k_sample = gsm8k.shuffle(seed=seed).select(range(min(num_gsm, len(gsm8k))))
         
         def process_gsm(example):
