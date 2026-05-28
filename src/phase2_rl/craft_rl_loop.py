@@ -116,9 +116,8 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
         # --- FIX: Load config and patch rope_scaling before model load ---
         from transformers import AutoConfig
         config = AutoConfig.from_pretrained(base_model_name, trust_remote_code=True)
-        if hasattr(config, "rope_scaling") and isinstance(config.rope_scaling, dict):
-            if "type" not in config.rope_scaling:
-                config.rope_scaling["type"] = "su"
+        # Disable rope scaling to prevent KeyError in buggy remote code
+        config.rope_scaling = None
         
         # Policy / Active model
         model = AutoModelForCausalLM.from_pretrained(
