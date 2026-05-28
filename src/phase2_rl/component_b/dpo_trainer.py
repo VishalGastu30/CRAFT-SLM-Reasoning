@@ -31,7 +31,7 @@ class StepDPOTrainer:
         prompt_len = prompt_inputs.input_ids.shape[1]
 
         with torch.set_grad_enabled(model.training):
-            outputs = model(full_ids)
+            outputs = model(full_ids, use_cache=False)
             logits = outputs.logits
 
         # Shift for causal LM: logit[i] predicts token[i+1]

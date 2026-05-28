@@ -37,7 +37,7 @@ def compute_seq_logps(model, tokenizer, prompt: str, response: str) -> torch.Ten
 
     # Forward pass through the full sequence
     with torch.set_grad_enabled(model.training):
-        outputs = model(full_ids)
+        outputs = model(full_ids, use_cache=False)
         logits = outputs.logits
 
     # Shift: logit[i] predicts token[i+1]
