@@ -236,6 +236,7 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
         grpo_loss_val = 0.0
         dpo_loss_val = 0.0
         mean_kl = 0.0
+        kl_beta = kl_controller.beta
         
         # Check if Component B is activated (Step DPO starts at step 100)
         component_b_active = step >= dpo_activation_step
