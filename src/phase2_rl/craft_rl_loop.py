@@ -19,37 +19,45 @@ from src.phase2_rl.component_b.dpo_trainer import StepDPOTrainer
 
 def compute_seq_logps(model, tokenizer, prompt: str, response: str) -> torch.Tensor:
     """
-    Computes the log probabilities of the tokens in the response
-    conditioned on the prompt prefix.
+    Computes the sum of log probabilities of ONLY the response tokens
+    conditioned on the prompt prefix. Multi-GPU safe.
     """
-    device = model.device
+    # Multi-GPU safe: get device from the first embedding layer, not model.device
+    try:
+        device = next(model.parameters()).device
+    except StopIteration:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     full_text = prompt + response
     full_inputs = tokenizer(full_text, return_tensors="pt").to(device)
     prompt_inputs = tokenizer(prompt, return_tensors="pt").to(device)
-    
+
     full_ids = full_inputs.input_ids
     prompt_len = prompt_inputs.input_ids.shape[1]
-    
-    # Forward pass
+
+    # Forward pass through the full sequence
     with torch.set_grad_enabled(model.training):
         outputs = model(full_ids)
         logits = outputs.logits
-        
-    # Shift logits and labels
-    shift_logits = logits[..., :-1, :].contiguous()
-    shift_labels = full_ids[..., 1:].contiguous()
-    
-    # Slice response part
-    resp_logits = shift_logits[:, prompt_len - 1:]
-    resp_labels = shift_labels[:, prompt_len - 1:]
-    
-    # Calculate log-softmax
+
+    # Shift: logit[i] predicts token[i+1]
+    # So response tokens start at index prompt_len in the shifted view
+    shift_logits = logits[..., :-1, :].contiguous()   # shape: [1, seq_len-1, vocab]
+    shift_labels = full_ids[..., 1:].contiguous()      # shape: [1, seq_len-1]
+
+    # Slice ONLY the response portion (exclude prompt tokens)
+    resp_logits = shift_logits[:, prompt_len:]         # shape: [1, resp_len, vocab]
+    resp_labels = shift_labels[:, prompt_len:]         # shape: [1, resp_len]
+
+    if resp_labels.shape[1] == 0:
+        return torch.tensor(0.0, device=device, requires_grad=model.training)
+
+    # Compute per-token log probabilities under the model
     log_probs = torch.nn.functional.log_softmax(resp_logits, dim=-1)
-    
-    # Gather actual label log probabilities
     per_token_logps = torch.gather(log_probs, dim=-1, index=resp_labels.unsqueeze(-1)).squeeze(-1)
-    
-    return per_token_logps.sum(dim=-1)
+
+    # Return the mean (not sum) to be length-invariant across different responses
+    return per_token_logps.mean(dim=-1)
 
 def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkpoints/rl", resume=False):
     """Main orchestrator for CRAFT Phase 2 Reinforcement Learning Loop."""
