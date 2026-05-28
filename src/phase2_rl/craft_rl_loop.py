@@ -113,21 +113,30 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
             bnb_4bit_compute_dtype=torch.float16
         )
         
+        # --- FIX: Load config and patch rope_scaling before model load ---
+        from transformers import AutoConfig
+        config = AutoConfig.from_pretrained(base_model_name, trust_remote_code=True)
+        if hasattr(config, "rope_scaling") and isinstance(config.rope_scaling, dict):
+            if "type" not in config.rope_scaling:
+                config.rope_scaling["type"] = "su"
+        
         # Policy / Active model
         model = AutoModelForCausalLM.from_pretrained(
             base_model_name,
+            config=config,
             quantization_config=bnb_config,
             device_map="auto",
-            trust_remote_code=False
+            trust_remote_code=True
         )
         model = prepare_model_for_kbit_training(model)
         
         # Reference model (frozen copy to compute reference KL)
         ref_model = AutoModelForCausalLM.from_pretrained(
             base_model_name,
+            config=config,
             quantization_config=bnb_config,
             device_map="auto",
-            trust_remote_code=False
+            trust_remote_code=True
         )
         ref_model.eval()
     else:
