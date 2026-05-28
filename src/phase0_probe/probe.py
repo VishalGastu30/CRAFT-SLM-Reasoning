@@ -155,18 +155,22 @@ class CapabilityProbe:
             # Load in 4-bit for speed and resource limits
             device = "cuda" if torch.cuda.is_available() else "cpu"
             
+            # Phase 0 is inference-only (no training), so we load in bfloat16
+            # without quantization. This avoids any bitsandbytes CUDA dependency.
+            # Phi-3-mini in bfloat16 = ~7.6GB — fits easily in Kaggle's 32GB VRAM.
             if device == "cuda":
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     device_map="auto",
-                    torch_dtype=torch.float16,
-                    load_in_4bit=True
+                    torch_dtype=torch.bfloat16,
+                    trust_remote_code=True,
                 )
             else:
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     device_map="cpu",
-                    torch_dtype=torch.float32
+                    torch_dtype=torch.float32,
+                    trust_remote_code=True,
                 )
         else:
             logger.info("Running in DRY RUN mode. Using simulated/mock generations.")
