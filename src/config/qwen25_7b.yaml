@@ -1,0 +1,34 @@
+# Qwen2.5-7B Model Configuration Overrides
+# Note: This configuration requires 2x24GB GPUs (cannot run on Kaggle 2xT4 free tier)
+
+model:
+  name: "Qwen/Qwen2.5-7B-Instruct"
+  max_seq_length: 1024
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+sft:
+  per_device_train_batch_size: 1          # Requires high gradient accumulation on lower VRAM
+  gradient_accumulation_steps: 16
+  learning_rate: 1e-4
+  epochs: 3
+
+sft_local:                                # Optimal settings for local 2x24GB workstation
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 8
+
+rl:
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 3e-6
+  total_steps: 500
+
+rl_local:
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
