@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CRAFT — Curriculum-guided Reinforced Adaptive Fine-Tuning</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <div class="dashboard-container">
+    
+    <!-- Top Header -->
+    <header>
+      <div class="logo-section">
+        <h1>CRAFT.</h1>
+        <p>Curriculum-guided Reinforced Adaptive Fine-Tuning for Small Language Models (SLMs)</p>
+      </div>
+      <div class="badge-container">
+        <div class="badge">Team Aurvion</div>
+        <div id="connection-status" class="badge">Checking connection...</div>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="dashboard-body">
+      
+      <!-- Left Panel: Interactive Playground -->
+      <section class="panel">
+        <h2 class="panel-title">
+          Interactive Reasoning Playground
+          <span class="loader" id="playground-loader"></span>
+        </h2>
+        
+        <div class="input-group">
+          <label for="question-input">Enter Reasoning Prompt / Question</label>
+          <textarea id="question-input" placeholder="Type a logical or mathematical question here... (e.g. 'What is 15% of 240?')"></textarea>
+        </div>
+        
+        <div class="settings-bar">
+          <div class="setting-item">
+            <label for="temperature-select">Generation Temperature</label>
+            <select id="temperature-select">
+              <option value="0.2">0.2 (Focused / Deterministic)</option>
+              <option value="0.5">0.5 (Balanced)</option>
+              <option value="0.8" selected>0.8 (Creative / Reasoning)</option>
+            </select>
+          </div>
+          <div class="setting-item">
+            <label for="model-mode-select">Evaluation Mode</label>
+            <select id="model-mode-select">
+              <option value="craft" selected>CRAFT (Adaptive RL + Step Verifiers)</option>
+              <option value="baseline">Baseline Phi-3-Mini (Instruct)</option>
+            </select>
+          </div>
+        </div>
+        
+        <button id="run-btn" class="btn-primary">
+          <span>Run CRAFT Reasoning</span>
+        </button>
+        
+        <!-- Interactive Outputs -->
+        <div class="outputs-container">
+          <label>Step-by-Step Reasoning Trace</label>
+          <div id="steps-container" class="steps-list">
+            <!-- Steps are dynamically injected here -->
+            <div style="color: var(--color-text-muted); font-size: 14px; font-style: italic; text-align: center; padding: 20px;">
+              Enter a question and run inference to see the step-by-step reasoning steps.
+            </div>
+          </div>
+          <div id="final-answer-container" class="final-answer-box">
+            Final Answer: <span id="final-answer-val">-</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Panel: KPIs & Benchmarks -->
+      <section class="panel">
+        <h2 class="panel-title">CRAFT KPIs & Benchmark Metrics</h2>
+        
+        <!-- Metrics Cards -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-label">Local Inference Latency</div>
+            <div id="latency-val" class="metric-value">-</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Execution Mode</div>
+            <div id="mode-val" class="metric-value">-</div>
+          </div>
+        </div>
+        
+        <!-- Benchmark Section -->
+        <div class="benchmark-section">
+          <h3>Phase 2 Benchmark Accuracy comparison</h3>
+          
+          <!-- GSM8K Row -->
+          <div class="benchmark-row">
+            <div class="benchmark-info">
+              <span>GSM8K (Mathematical reasoning)</span>
+              <span>Baseline: 41.5% | CRAFT: 78.4%</span>
+            </div>
+            <div class="bar-container">
+              <div class="bar baseline" style="width: 41.5%">Baseline 41.5%</div>
+              <div class="bar sft" style="width: 52.8%">SFT Warmup 52.8%</div>
+              <div class="bar craft" style="width: 78.4%">CRAFT RL 78.4%</div>
+            </div>
+          </div>
+          
+          <!-- StrategyQA Row -->
+          <div class="benchmark-row">
+            <div class="benchmark-info">
+              <span>StrategyQA (Multi-step logic)</span>
+              <span>Baseline: 61.2% | CRAFT: 76.2%</span>
+            </div>
+            <div class="bar-container">
+              <div class="bar baseline" style="width: 61.2%">Baseline 61.2%</div>
+              <div class="bar sft" style="width: 64.5%">SFT Warmup 64.5%</div>
+              <div class="bar craft" style="width: 76.2%">CRAFT RL 76.2%</div>
+            </div>
+          </div>
+          
+          <!-- MMLU Row -->
+          <div class="benchmark-row">
+            <div class="benchmark-info">
+              <span>MMLU (College Mathematics)</span>
+              <span>Baseline: 35.6% | CRAFT: 46.8%</span>
+            </div>
+            <div class="bar-container">
+              <div class="bar baseline" style="width: 35.6%">Baseline 35.6%</div>
+              <div class="bar sft" style="width: 38.2%">SFT Warmup 38.2%</div>
+              <div class="bar craft" style="width: 46.8%">CRAFT RL 46.8%</div>
+            </div>
+          </div>
+        </div>
+        
+        <div style="font-size: 13px; color: var(--color-text-muted); line-height: 1.6; border-top: 1px solid var(--border-color); padding-top: 15px;">
+          <strong>Failure Diagnosis & Fixes:</strong><br>
+          We observed that standard RL training on SLMs causes sparse reward collapse. CRAFT integrates three main fixes:
+          (A) Step-Level Symbolic Math Evaluator & Logical Entailment Cross-Encoder,
+          (B) Contrastive Step-Level Preference DPO learning from reasoning path pairs, and
+          (C) Active curriculum starting in the model's 40-70% difficulty zone and expanding on stability.
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer style="margin-top: 12px; font-size: 13px; color: var(--color-text-muted); text-align: center; border: 1px solid var(--border-color); padding: 15px; border-radius: 16px; backdrop-filter: blur(16px); background: var(--panel-bg);">
+      Samsung EnnovateX Phase 2 | Aurvion Team: G.Vishal & E.Kevin Godfrey | SRM Institute of Science and Technology
+    </footer>
+    
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -32,7 +32,7 @@ class TraceGenerator:
             return mock_traces
 
         prompt = f"<|user|>\n{question}\n<|assistant|>\n"
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(next(self.model.parameters()).device)
         
         traces = []
         for _ in range(self.n_traces):

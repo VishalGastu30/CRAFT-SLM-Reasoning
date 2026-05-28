@@ -14,41 +14,42 @@ class StepDPOTrainer:
 
     def compute_step_logps(self, model, tokenizer, prompt: str, target_step: str) -> torch.Tensor:
         """
-        Computes the log probabilities of the tokens in the target_step
-        conditioned on the prompt prefix.
+        Computes the mean log probability of the tokens in the target_step
+        conditioned on the prompt prefix. Multi-GPU safe.
         """
-        device = model.device
-        
-        # Tokenize the full sequence and prompt only sequence
+        # Multi-GPU safe: use first parameter's device
+        try:
+            device = next(model.parameters()).device
+        except StopIteration:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         full_text = prompt + target_step
         full_inputs = tokenizer(full_text, return_tensors="pt").to(device)
         prompt_inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        
+
         full_ids = full_inputs.input_ids
         prompt_len = prompt_inputs.input_ids.shape[1]
-        
-        # Forward pass to get logits
+
         with torch.set_grad_enabled(model.training):
             outputs = model(full_ids)
             logits = outputs.logits
-            
-        # Shift logits and labels for causal LM loss computation
+
+        # Shift for causal LM: logit[i] predicts token[i+1]
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = full_ids[..., 1:].contiguous()
-        
-        # We only calculate log probs for the tokens corresponding to the target_step
-        # target_step tokens start after the prompt_len - 1 in shift_logits/labels
-        step_logits = shift_logits[:, prompt_len - 1:]
-        step_labels = shift_labels[:, prompt_len - 1:]
-        
-        # Calculate log-softmax over vocabulary
+
+        # Slice ONLY the target_step tokens (fix off-by-one: use prompt_len not prompt_len-1)
+        step_logits = shift_logits[:, prompt_len:]
+        step_labels = shift_labels[:, prompt_len:]
+
+        if step_labels.shape[1] == 0:
+            return torch.tensor(0.0, device=device)
+
         log_probs = F.log_softmax(step_logits, dim=-1)
-        
-        # Gather log probabilities for the actual labels
         per_token_logps = torch.gather(log_probs, dim=-1, index=step_labels.unsqueeze(-1)).squeeze(-1)
-        
-        # Sum over token sequence
-        return per_token_logps.sum(dim=-1)
+
+        # Use mean for length-invariance
+        return per_token_logps.mean(dim=-1)
 
     def compute_dpo_loss(self, model, ref_model, tokenizer, prompt: str, chosen: str, rejected: str) -> torch.Tensor:
         """
