@@ -22,8 +22,8 @@ def safe_eval(expr_str: str) -> float:
     Only allows basic arithmetic operations and numbers.
     """
     expr_str = expr_str.replace("=", "").strip()
-    # Replace common multiplication symbols and whitespace
-    expr_str = expr_str.replace("x", "*").replace("X", "*").replace(",", "")
+    # Replace common multiplication symbols, exponentiation, and whitespace
+    expr_str = expr_str.replace("x", "*").replace("X", "*").replace(",", "").replace("^", "**")
     
     try:
         node = ast.parse(expr_str, mode='eval').body
@@ -67,7 +67,12 @@ def extract_math_expressions(step_text: str) -> List[Tuple[str, str]]:
     valid_equations = []
     for lhs, rhs in equations:
         lhs = lhs.strip()
-        rhs = rhs.strip()
+        rhs = rhs.strip().rstrip(".")
+        
+        # If lhs contains a dot followed by space, it is likely a sentence boundary. Take the last part.
+        if re.search(r"\.\s+", lhs):
+            lhs = re.split(r"\.\s+", lhs)[-1].strip()
+            
         # Ensure lhs actually has operators to avoid matching trivial "number = number" or "Step 1 = ..."
         if any(op in lhs for op in ["+", "-", "*", "/", "^"]):
             # Normalize 'x' or 'X' multiplication to '*'
@@ -100,8 +105,8 @@ def extract_steps(response_text: str) -> List[str]:
     if not response_text:
         return []
         
-    # Split using step prefix delimiters, keeping the step text intact
-    steps = re.split(r"(?:^|\n)Step \d+\s*[:\-]\s*", response_text.strip())
+    # Split using step prefix delimiters (with word boundary), keeping the step text intact
+    steps = re.split(r"\bStep \d+\s*[:\-]\s*", response_text.strip())
     
     # Filter out empty or extremely small matches (which might precede the first Step 1)
     cleaned_steps = [s.strip() for s in steps if len(s.strip()) > 3]

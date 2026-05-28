@@ -48,7 +48,7 @@ def test_curriculum_engine():
         "q1": {"difficulty": 0.2, "question": "q1", "answer": "a1"},
         "q2": {"difficulty": 0.5, "question": "q2", "answer": "a2"},
         "q3": {"difficulty": 0.7, "question": "q3", "answer": "a3"},
-        "q4": {"difficulty": 0.9, "question": "q4", "answer": "a4"}
+        "q4": {"difficulty": 0.8, "question": "q4", "answer": "a4"}
     }
     
     # Save map temporarily
