@@ -95,6 +95,8 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # Reference and Active models (for KL penalty)
+    base_model_name = raw_config["model"]["name"]
+    
     if device == "cuda":
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -105,7 +107,7 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
         
         # Policy / Active model
         model = AutoModelForCausalLM.from_pretrained(
-            sft_model_path,
+            base_model_name,
             quantization_config=bnb_config,
             device_map="auto",
             trust_remote_code=True
@@ -114,7 +116,7 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
         
         # Reference model (frozen copy to compute reference KL)
         ref_model = AutoModelForCausalLM.from_pretrained(
-            sft_model_path,
+            base_model_name,
             quantization_config=bnb_config,
             device_map="auto",
             trust_remote_code=True
@@ -122,18 +124,26 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
         ref_model.eval()
     else:
         logger.warning("No CUDA device detected. Running RL loop on CPU (mock mode).")
-        model = AutoModelForCausalLM.from_pretrained(sft_model_path, device_map="cpu", trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(base_model_name, device_map="cpu", trust_remote_code=True)
         ref_model = None
 
-    # LoRA config for policy fine-tuning
-    lora_config = LoraConfig(
-        r=raw_config.get("sft", {}).get("lora_rank", 64),
-        lora_alpha=raw_config.get("sft", {}).get("lora_alpha", 128),
-        target_modules=raw_config.get("sft", {}).get("target_modules", ["q_proj", "v_proj"]),
-        bias="none",
-        task_type="CAUSAL_LM"
-    )
-    model = get_peft_model(model, lora_config)
+    # Load the Phase 1 SFT Adapter correctly so we can continue training it
+    from peft import PeftModel
+    if sft_model_path != base_model_name:
+        logger.info(f"Applying SFT adapter from {sft_model_path}")
+        model = PeftModel.from_pretrained(model, sft_model_path, is_trainable=True)
+        if ref_model is not None:
+            ref_model = PeftModel.from_pretrained(ref_model, sft_model_path, is_trainable=False)
+    else:
+        # If no SFT checkpoint, initialize a fresh LoRA
+        lora_config = LoraConfig(
+            r=raw_config.get("sft", {}).get("lora_rank", 64),
+            lora_alpha=raw_config.get("sft", {}).get("lora_alpha", 128),
+            target_modules=raw_config.get("sft", {}).get("target_modules", ["q_proj", "v_proj"]),
+            bias="none",
+            task_type="CAUSAL_LM"
+        )
+        model = get_peft_model(model, lora_config)
     
     # 3. Resume training if requested
     start_step = 1
