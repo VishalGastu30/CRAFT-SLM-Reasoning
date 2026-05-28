@@ -131,7 +131,7 @@ def train_sft(config_name="phi3_mini", hardware_name="kaggle", output_dir="check
         save_total_limit=3,
         fp16=(device == "cuda"),
         optim="paged_adamw_8bit" if device == "cuda" else "adamw_torch",
-        remove_unused_columns=False,
+        remove_unused_columns=True,
         report_to="none"
     )
     
