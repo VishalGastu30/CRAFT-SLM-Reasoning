@@ -475,11 +475,11 @@ def train_rl(
     # Resume from checkpoint if requested
     start_step = 1
     if resume:
-        latest = checkpoint_mgr.get_latest()
-        if latest:
-            logger.info(f"Resuming from step {latest['step']}")
-            start_step = latest["step"] + 1
-            checkpoint_mgr.load_optimizer_state(optimizer, latest["step"])
+        latest_meta, latest_path = checkpoint_mgr.get_latest()
+        if latest_meta is not None:
+            resume_step = latest_meta.get("step", 0)
+            logger.info(f"Resuming from step {resume_step} (checkpoint: {latest_path})")
+            start_step = resume_step + 1
         else:
             logger.info("No checkpoint found. Starting from step 1.")
     
