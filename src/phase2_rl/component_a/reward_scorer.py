@@ -275,11 +275,22 @@ class RewardScorer:
         # Combined score
         R_A = 0.4 * float(final_correct) + 0.6 * step_score
         
-        # Small bonus for having well-structured output (encouraged)
-        has_thought_tags = '<thought>' in response_text.lower()
+        # Structure bonuses (helps early RL when it forgets tags)
+        has_thought_start = '<thought>' in response_text.lower()
+        has_thought_end = '</thought>' in response_text.lower()
         has_answer_tags = '<answer>' in response_text.lower()
-        if has_thought_tags and has_answer_tags:
-            R_A = min(1.0, R_A + 0.05)  # 5% bonus for correct format
+        
+        if has_thought_start: R_A += 0.01
+        if has_thought_end: R_A += 0.01
+        if has_answer_tags: R_A += 0.03
+        
+        # Tiny length penalty to break ties and prevent 0 std dev
+        # Different generations will have different lengths, creating reward variance
+        # which allows GRPO advantages to be non-zero.
+        length_penalty = (len(response_text) / 1000.0) * 0.005
+        R_A -= min(0.005, length_penalty)
+        
+        R_A = max(0.0, min(1.0, R_A))
         
         return R_A, final_correct
 
