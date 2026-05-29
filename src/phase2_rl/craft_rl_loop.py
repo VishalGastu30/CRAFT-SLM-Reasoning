@@ -619,7 +619,7 @@ def train_rl(
         
         # ── CHECKPOINT ───────────────────────────────────────────────────────
         if step % SAVE_EVERY == 0:
-            checkpoint_mgr.save(policy_model, optimizer, step)
+            checkpoint_mgr.save(policy_model, tokenizer, step, metadata={"step": step})
             logger.info(f"Checkpoint saved at step {step}")
     
     # ── FINAL SAVE ───────────────────────────────────────────────────────────
