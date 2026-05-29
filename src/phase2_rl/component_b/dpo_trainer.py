@@ -76,3 +76,25 @@ class StepDPOTrainer:
         
         loss = -F.logsigmoid(self.beta * (policy_ratio - ref_ratio))
         return loss.mean()
+
+    def compute_loss(self, policy_model, ref_model, tokenizer, contrastive_pairs: list, device: str = "cuda") -> torch.Tensor:
+        """
+        Computes the mean DPO loss over a list of contrastive pairs.
+        Wrapper compatibility method matching the new craft_rl_loop interface.
+        """
+        dpo_losses = []
+        for pair in contrastive_pairs:
+            loss = self.compute_dpo_loss(
+                model=policy_model,
+                ref_model=ref_model,
+                tokenizer=tokenizer,
+                prompt=pair["prompt"],
+                chosen=pair["chosen"],
+                rejected=pair["rejected"]
+            )
+            dpo_losses.append(loss)
+            
+        if not dpo_losses:
+            return torch.tensor(0.0, device=device, requires_grad=True)
+            
+        return torch.stack(dpo_losses).mean()

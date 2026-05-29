@@ -95,3 +95,21 @@ class ContrastiveBuilder:
                         break
                         
         return contrastive_pairs
+
+    def build_pairs(self, question_data: dict, response_texts: List[str], rewards: List[float]) -> List[Dict[str, Any]]:
+        """
+        Wrapper compatibility method matching the new craft_rl_loop interface.
+        """
+        question = question_data.get("question", question_data.get("problem", ""))
+        ground_truth = question_data.get("answer", "")
+        dataset_name = question_data.get("dataset", "")
+        
+        # Build traces list
+        traces = [{"trace_text": text} for text in response_texts]
+        
+        return self.build_step_pairs(
+            question=question,
+            traces=traces,
+            ground_truth=ground_truth,
+            dataset_name=dataset_name
+        )
