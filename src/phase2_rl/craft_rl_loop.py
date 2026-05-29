@@ -36,8 +36,8 @@ def compute_seq_logps(model, tokenizer, prompt: str, response: str) -> torch.Ten
     prompt_len = prompt_inputs.input_ids.shape[1]
 
     # Forward pass through the full sequence
-    with torch.set_grad_enabled(model.training):
-        outputs = model(full_ids, use_cache=False)
+    with torch.no_grad():
+        outputs = model(full_ids)
         logits = outputs.logits
 
     # Shift: logit[i] predicts token[i+1]
@@ -211,8 +211,7 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
                     max_new_tokens=256,
                     do_sample=True,
                     temperature=temperature,
-                    pad_token_id=tokenizer.eos_token_id,
-                    use_cache=False
+                    pad_token_id=tokenizer.eos_token_id
                 )
                 response = tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
                 group_responses.append(response)
