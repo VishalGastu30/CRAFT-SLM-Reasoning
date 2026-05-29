@@ -519,7 +519,6 @@ def train_rl(
             
             # ── LOAD RL CHECKPOINT WEIGHTS ──────────────────────────────────────────────
             logger.info("Loading policy model weights from RL checkpoint...")
-            import os
             from safetensors.torch import load_file
             from peft import set_peft_model_state_dict
             
