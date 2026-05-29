@@ -532,6 +532,31 @@ def train_rl(
                 logger.error(f"Missing adapter weights at {adapter_path}")
                 sys.exit(1)
             
+            # ── RESTORE KL CONTROLLER STATE ─────────────────────────────────────────────
+            # The model has already trained for `resume_step` steps, so:
+            # 1. Skip the warmup — it already happened in the original run
+            # 2. Restore the last known beta value if saved in metadata
+            saved_beta = latest_meta.get("kl_beta", None)
+            if saved_beta is not None:
+                kl_controller.beta = saved_beta
+                logger.info(f"Restored KL beta from checkpoint: {saved_beta:.4f}")
+            # Fast-forward step count past warmup so the controller is active immediately
+            kl_controller._step_count = max(resume_step, kl_controller.warmup_steps + 1)
+            logger.info(
+                f"KL controller warmup skipped (step_count set to {kl_controller._step_count}). "
+                f"Controller is ACTIVE with beta={kl_controller.beta:.4f}"
+            )
+            
+            # ── RESTORE CURRICULUM STATE ────────────────────────────────────────────────
+            saved_curr_min = latest_meta.get("curriculum_min", None)
+            saved_curr_max = latest_meta.get("curriculum_max", None)
+            if saved_curr_min is not None and saved_curr_max is not None:
+                curriculum.current_range = [saved_curr_min, saved_curr_max]
+                logger.info(
+                    f"Restored curriculum range from checkpoint: "
+                    f"[{saved_curr_min:.4f}, {saved_curr_max:.4f}]"
+                )
+            
             # ── CHECKPOINT VALIDATION AFTER LOADING ─────────────────────────────────────
             logger.info(f"Validating checkpoint at {latest_path}...")
             
@@ -741,7 +766,12 @@ def train_rl(
         
         # ── CHECKPOINT ───────────────────────────────────────────────────────
         if step % SAVE_EVERY == 0:
-            checkpoint_mgr.save(policy_model, tokenizer, step, metadata={"step": step})
+            checkpoint_mgr.save(policy_model, tokenizer, step, metadata={
+                "step": step,
+                "kl_beta": kl_controller.get_beta(),
+                "curriculum_min": curriculum.current_range[0],
+                "curriculum_max": curriculum.current_range[1],
+            })
             logger.info(f"Checkpoint saved at step {step}")
     
     # ── FINAL SAVE ───────────────────────────────────────────────────────────
