@@ -13,21 +13,33 @@ class RewardCombiner:
 
     def calculate_format_penalty(self, response_text: str) -> float:
         """
-        Penalizes outputs that fail to follow the expected formatting rules:
-        - Must contain step keywords ("Step 1:", etc.)
-        - Must contain "Final Answer:" delimiter
+        Penalizes outputs that fail to follow the expected formatting rules.
+        Accepts either XML-tag format (<thought>/<answer>) OR text format (Step 1: / Final Answer:).
+        Only penalizes if NEITHER format is present.
         """
         penalty = 0.0
         response_lower = response_text.lower()
-        
-        # 1. Check for "step 1"
-        if "step 1" not in response_lower:
+
+        # Check for reasoning structure: XML tags OR step keywords
+        has_reasoning = (
+            "<thought>" in response_lower
+            or "</thought>" in response_lower
+            or "step 1" in response_lower
+            or "step1" in response_lower
+        )
+        if not has_reasoning:
             penalty += 0.2
-            
-        # 2. Check for "final answer"
-        if "final answer" not in response_lower:
+
+        # Check for final answer: XML tags OR text delimiter
+        has_answer = (
+            "<answer>" in response_lower
+            or "</answer>" in response_lower
+            or "final answer" in response_lower
+            or "####" in response_lower
+        )
+        if not has_answer:
             penalty += 0.2
-            
+
         return penalty
 
     def combine_rewards(self, question: str, response_text: str, ground_truth: str, dataset_name: str = "") -> dict:

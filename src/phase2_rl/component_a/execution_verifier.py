@@ -99,22 +99,32 @@ def verify_expression(lhs_expr: str, rhs_val: str) -> bool:
 
 def extract_steps(response_text: str) -> List[str]:
     """
-    Splits reasoning traces into individual step blocks by looking for step patterns:
-    "Step 1:", "Step 2:", etc.
+    Splits reasoning traces into individual step blocks.
+    Handles two formats:
+    1. XML format: <thought>...step content...</thought>
+    2. Text format: "Step 1:", "Step 2:", etc.
     """
     if not response_text:
         return []
-        
-    # Split using step prefix delimiters (with word boundary), keeping the step text intact
+
+    # 1. Try XML <thought> tag format first (SFT-trained model output)
+    thought_match = re.search(r"<thought>(.*?)</thought>", response_text, re.DOTALL | re.IGNORECASE)
+    if thought_match:
+        thought_content = thought_match.group(1).strip()
+        # Split by newlines or step patterns within the thought block
+        raw_steps = re.split(r"\bStep \d+\s*[:\-]\s*|\n+", thought_content)
+        cleaned = [s.strip() for s in raw_steps if len(s.strip()) > 3]
+        if cleaned:
+            return cleaned
+
+    # 2. Fallback: text-format "Step N:" delimiter
     steps = re.split(r"\bStep \d+\s*[:\-]\s*", response_text.strip())
-    
-    # Filter out empty or extremely small matches (which might precede the first Step 1)
     cleaned_steps = [s.strip() for s in steps if len(s.strip()) > 3]
-    
-    # If no explicit steps were formatted but we have lines, treat each line as a step as fallback
+
+    # 3. Last resort: treat each line as a step
     if not cleaned_steps:
         cleaned_steps = [line.strip() for line in response_text.split("\n") if len(line.strip()) > 5]
-        
+
     return cleaned_steps
 
 def score_reasoning_chain(response_text: str, ground_truth: str) -> Dict[str, Any]:

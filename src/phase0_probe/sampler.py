@@ -5,33 +5,38 @@ def extract_final_answer(response_text: str) -> str:
     """
     Extracts the final answer from the model's output text.
     Handles common math formats:
+    - XML format: <answer>42</answer>  (SFT-trained model output)
     - GSM8K: "#### 123"
     - Standard: "The answer is 123" or "Final Answer: 123" or "answer is: 123"
     - Logical: "Therefore, [yes/no]" or "Answer: yes"
     """
     if not response_text:
         return ""
-        
+
     response_text = response_text.strip()
-    
+
+    # 0. Look for XML <answer> tag (highest priority — SFT model format)
+    xml_match = re.search(r"<answer>(.*?)</answer>", response_text, re.DOTALL | re.IGNORECASE)
+    if xml_match:
+        return xml_match.group(1).strip(".$ \n\t")
+
     # 1. Look for GSM8K delimiter
     gsm8k_match = re.search(r"####\s*([^\s]+)", response_text)
     if gsm8k_match:
         return gsm8k_match.group(1).strip(".$ \n\t")
-        
+
     # 2. Look for "Final Answer: X" or "The answer is X"
     patterns = [
         r"(?:final answer|answer)\s*(?:is)?\s*[:\s]\s*([^\s\n\.\?]+)",
         r"(?:therefore|thus|consequently)[,\s]*the answer\s*(?:is)?\s*[:\s]*([^\s\n\.\?]+)",
         r"the answer is\s*([^\s\n\.\?]+)"
     ]
-    
+
     for pattern in patterns:
         match = re.search(pattern, response_text, re.IGNORECASE)
         if match:
-            # Clean up the output (strip spaces, symbols, punctuation)
             return match.group(1).strip(".$ \n\t")
-            
+
     # 3. Fallback: take the last number or capitalized word in the last line
     lines = [line.strip() for line in response_text.split("\n") if line.strip()]
     if lines:
@@ -42,8 +47,9 @@ def extract_final_answer(response_text: str) -> str:
         words = re.findall(r"\b[A-Za-z0-9]+\b", last_line)
         if words:
             return words[-1]
-            
+
     return ""
+
 
 def check_answer_correct(predicted: str, ground_truth: str) -> bool:
     """
