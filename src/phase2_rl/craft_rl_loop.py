@@ -517,6 +517,21 @@ def train_rl(
             logger.info(f"Resuming from step {resume_step} (checkpoint: {latest_path})")
             start_step = resume_step + 1
             
+            # ── LOAD RL CHECKPOINT WEIGHTS ──────────────────────────────────────────────
+            logger.info("Loading policy model weights from RL checkpoint...")
+            import os
+            from safetensors.torch import load_file
+            from peft import set_peft_model_state_dict
+            
+            adapter_path = os.path.join(latest_path, "adapter_model.safetensors")
+            if os.path.exists(adapter_path):
+                state_dict = load_file(adapter_path)
+                set_peft_model_state_dict(policy_model, state_dict)
+                logger.info("✅ RL checkpoint weights successfully loaded into policy model.")
+            else:
+                logger.error(f"Missing adapter weights at {adapter_path}")
+                sys.exit(1)
+            
             # ── CHECKPOINT VALIDATION AFTER LOADING ─────────────────────────────────────
             logger.info(f"Validating checkpoint at {latest_path}...")
             
