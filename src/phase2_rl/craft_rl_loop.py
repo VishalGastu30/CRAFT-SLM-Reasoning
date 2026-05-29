@@ -696,14 +696,16 @@ def train_rl(
         # ── KL CONTROLLER: Adjust beta based on measured KL ─────────────────
         current_beta = kl_controller.step(kl_loss_val)
         
-        # ── PERIODIC MEMORY CLEANUP ──────────────────────────────────────────────────
-        # Run every 50 steps to prevent gradual GPU memory accumulation.
+        # ── PER-STEP MEMORY CLEANUP ──────────────────────────────────────────────────
+        # Python's autograd creates reference cycles that leak memory until gc runs.
+        # We must run gc.collect() every step to prevent OOMs on 15GB T4 GPUs.
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+        
         if step % 50 == 0:
-            import gc
-            gc.collect()
-            torch.cuda.empty_cache()
             logger.info(
-                f"Memory cleared at step {step}. "
+                f"Memory status at step {step}: "
                 f"GPU memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f}GB"
             )
 
