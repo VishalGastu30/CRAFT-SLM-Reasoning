@@ -276,12 +276,16 @@ def train_rl(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkp
                 with torch.no_grad():
                     ref_logps = compute_seq_logps(ref_model, tokenizer, prompt, response)
                     
-                # Approximate KL divergence
-                kl_div = (policy_logps - ref_logps).mean()
-                kl_divs.append(kl_div.item())
+                # Approximate KL divergence (using Schulman's mathematically sound estimator)
+                ratio = torch.exp(ref_logps - policy_logps)
+                kl_div_loss = (ratio - torch.log(ratio) - 1).mean()
                 
-                # Actor loss: -advantage * policy_logps + kl_beta * kl_div
-                actor_loss = -advantage * policy_logps + kl_beta * kl_div
+                # We log the true sample KL for the controller, but use the sound estimator for the loss
+                true_sample_kl = (policy_logps - ref_logps).mean()
+                kl_divs.append(true_sample_kl.item())
+                
+                # Actor loss: -advantage * policy_logps + kl_beta * kl_div_loss
+                actor_loss = -advantage * policy_logps + kl_beta * kl_div_loss
                 grpo_losses.append(actor_loss)
                 
             grpo_loss = torch.stack(grpo_losses).mean()
