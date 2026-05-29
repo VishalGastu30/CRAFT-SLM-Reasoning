@@ -53,14 +53,17 @@ def verify_arithmetic(expression: str) -> Tuple[bool, float]:
     # Try literal eval first (pure constants)
     try:
         computed_val = ast.literal_eval(sanitized)
-        return True, float(computed_val)
+        if isinstance(computed_val, (int, float)):
+            return True, float(computed_val)
     except (ValueError, SyntaxError):
         pass
     
     # Restricted eval with empty builtins (no access to builtins like __import__)
     try:
         computed_val = eval(sanitized, {"__builtins__": {}})  # nosec B307
-        return True, float(computed_val)
+        if isinstance(computed_val, (int, float)):
+            return True, float(computed_val)
+        return False, 0.0
     except Exception:
         return False, 0.0
 
