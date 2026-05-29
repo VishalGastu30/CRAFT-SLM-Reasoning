@@ -9,12 +9,20 @@ class KLController:
     """
     def __init__(self, initial_beta: float = 0.04, target_kl: float = 0.1, kl_target: float = None, min_beta: float = 0.005, max_beta: float = 0.5, beta_min: float = None, beta_max: float = None):
         self.beta = initial_beta
+        self._initial_beta = initial_beta
         self.target_kl = kl_target if kl_target is not None else target_kl
         # support both beta_min / min_beta and beta_max / max_beta
         self.beta_min = beta_min if beta_min is not None else min_beta
         self.beta_max = beta_max if beta_max is not None else max_beta
         self.history = []
         logger.info(f"KLController initialized with initial_beta={self.beta}, target_kl={self.target_kl}")
+
+    def reset(self):
+        """Reset beta to initial value. Call this when resuming training
+        after fixing bugs — prevents carrying over a decayed beta."""
+        self.beta = self._initial_beta
+        self.history = []
+        logger.info(f"KL controller reset. beta={self.beta}")
 
     def step(self, kl_value: float) -> float:
         """

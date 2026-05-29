@@ -482,6 +482,9 @@ def train_rl(
             start_step = resume_step + 1
         else:
             logger.info("No checkpoint found. Starting from step 1.")
+            kl_controller.reset()
+    else:
+        kl_controller.reset()
     
     logger.info(
         f"GRPO RL Training active. Steps: {start_step} -> {TOTAL_STEPS} | "
