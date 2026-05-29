@@ -170,19 +170,23 @@ def compute_grpo_loss(
     group_size = len(rewards)
     prompt_len = prompt_ids.shape[1]
     
-    # Compute advantages: normalize rewards within the group
-    rewards_tensor = torch.tensor(rewards, dtype=torch.float32)
-    mean_reward = rewards_tensor.mean()
-    std_reward = rewards_tensor.std()
+    # ── GRPO ADVANTAGE COMPUTATION (safe version) ───────────────────────────────
     
-    if std_reward > 1e-8:
-        advantages = (rewards_tensor - mean_reward) / (std_reward + 1e-8)
+    rewards_tensor = torch.tensor(rewards, dtype=torch.float32)
+    reward_mean = rewards_tensor.mean()
+    reward_std = rewards_tensor.std()
+    
+    centered_advantages = rewards_tensor - reward_mean
+    
+    # Only normalize if there's meaningful variance
+    # Threshold: std must be at least 0.01 (1% of reward scale)
+    if reward_std.item() > 0.01:
+        advantages = centered_advantages / (reward_std + 1e-8)
     else:
-        # All rewards identical → no gradient signal possible
-        # Return zero loss — don't update on this batch
-        logger.debug("All rewards identical in group. Skipping gradient update.")
-        dummy_loss = torch.tensor(0.0, requires_grad=True)
-        return dummy_loss, 0.0, 0.0, rewards_tensor.tolist()
+        # All rewards similar — don't normalize, just center
+        # This produces near-zero loss which is correct: nothing to learn from
+        # a group where all outputs got the same reward
+        advantages = centered_advantages
     
     # ── POLICY FORWARD PASS (with gradients) ──────────────────────────────────
     # This is the critical section. policy_model MUST be in training mode.
@@ -304,6 +308,7 @@ def generate_group_responses(
             max_new_tokens=max_new_tokens,
             do_sample=True,
             temperature=temperature,
+            repetition_penalty=1.1,
             pad_token_id=tokenizer.pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
             # Do not return dict — just the token ids
@@ -370,6 +375,35 @@ def format_prompt(question_data: dict, tokenizer) -> str:
     return prompt
 
 
+def _validate_paths_before_training(config):
+    """
+    Check all required paths exist before wasting time on imports and setup.
+    Call this as the very first thing in train_rl().
+    """
+    required_paths = {
+        "SFT checkpoint": config.get("sft_checkpoint_path", "checkpoints/sft/final"),
+        "Difficulty map": config.get("difficulty_map_path", "data/difficulty_map.json"),
+    }
+    
+    missing = []
+    for name, path_val in required_paths.items():
+        if not os.path.exists(path_val):
+            missing.append(f"  {name}: {path_val}")
+    
+    if missing:
+        print("\n" + "="*60)
+        print("STARTUP ERROR: Required files not found.")
+        print("These files must exist before training can start:")
+        for m in missing:
+            print(m)
+        print("\nDid you run Phase 0 and Phase 1 in this session?")
+        print("Kaggle sessions are stateless — outputs from previous sessions")
+        print("are lost unless saved to a Kaggle Dataset.")
+        print("="*60 + "\n")
+        sys.exit(1)
+    
+    print("✅ All required paths validated. Training can begin.")
+
 def train_rl(
     config_name: str,
     hardware: str,
@@ -393,6 +427,8 @@ def train_rl(
     
     # Load config
     config = load_config(config_name, hardware)
+    
+    _validate_paths_before_training(config)
     
     # Detect hardware
     hw_info = detect_hardware()
@@ -480,6 +516,39 @@ def train_rl(
             resume_step = latest_meta.get("step", 0)
             logger.info(f"Resuming from step {resume_step} (checkpoint: {latest_path})")
             start_step = resume_step + 1
+            
+            # ── CHECKPOINT VALIDATION AFTER LOADING ─────────────────────────────────────
+            logger.info(f"Validating checkpoint at {latest_path}...")
+            
+            # Run one forward pass to confirm the loaded model produces valid output
+            try:
+                policy_model.eval()
+                with torch.no_grad():
+                    # Use a dummy input to test forward pass
+                    dummy_input = torch.ones(
+                        (1, 10), dtype=torch.long, device=device
+                    )
+                    test_output = policy_model(dummy_input)
+                    test_logits = test_output.logits
+                    
+                    # Check for NaN or inf in the output
+                    if torch.isnan(test_logits).any() or torch.isinf(test_logits).any():
+                        logger.error(
+                            "CHECKPOINT CORRUPTED: Forward pass produced NaN/inf. "
+                            "This checkpoint cannot be used safely. "
+                            "Start training from scratch."
+                        )
+                        sys.exit(1)
+                
+                logger.info("✅ Checkpoint validated. Forward pass produced valid output.")
+                policy_model.train()
+                
+            except Exception as checkpoint_error:
+                logger.error(
+                    f"CHECKPOINT VALIDATION FAILED: {checkpoint_error}. "
+                    "Start training from scratch."
+                )
+                sys.exit(1)
         else:
             logger.info("No checkpoint found. Starting from step 1.")
             kl_controller.reset()
@@ -557,6 +626,7 @@ def train_rl(
         component_b_active = False
         
         if step >= COMPONENT_B_START_STEP:
+            torch.cuda.empty_cache()
             component_b_active = True
             try:
                 contrastive_pairs = contrastive_builder.build_pairs(
@@ -575,6 +645,18 @@ def train_rl(
                     dpo_loss_val = dpo_loss.item()
                     # Add DPO loss to total (weighted lower than GRPO)
                     total_loss = total_loss + 0.1 * dpo_loss
+                
+                del contrastive_pairs
+                torch.cuda.empty_cache()
+            except RuntimeError as oom_error:
+                if "out of memory" in str(oom_error).lower():
+                    logger.warning(
+                        f"Step {step}: Component B OOM. Skipping this step. "
+                        f"Consider reducing n_traces further."
+                    )
+                    torch.cuda.empty_cache()
+                else:
+                    raise
             except Exception as e:
                 logger.warning(f"Step {step}: Component B failed: {e}. Continuing without DPO.")
         
@@ -590,11 +672,20 @@ def train_rl(
         
         total_loss.backward()
         
-        # Gradient clipping: prevents exploding gradients
+        # GRADIENT CLIPPING: prevents any single batch from making catastrophically
+        # large weight updates. max_norm=1.0 is the standard RL training value.
+        # If you skip this, large rewards in a single batch can corrupt the model.
         torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
         
+        # Update weights
         optimizer.step()
         optimizer.zero_grad()
+        
+        # ── MEMORY CLEANUP ───────────────────────────────────────────────────────────
+        # Delete large tensors explicitly to prevent GPU memory accumulation.
+        # Without this, after 200-300 steps you'll hit CUDA OOM.
+        del prompt_ids, generated_ids, response_texts, rewards
+        del total_loss, advantages
         
         # ── COMPONENT C: Update curriculum ──────────────────────────────────
         curriculum.update_accuracy(
@@ -605,6 +696,17 @@ def train_rl(
         # ── KL CONTROLLER: Adjust beta based on measured KL ─────────────────
         current_beta = kl_controller.step(kl_loss_val)
         
+        # ── PERIODIC MEMORY CLEANUP ──────────────────────────────────────────────────
+        # Run every 50 steps to prevent gradual GPU memory accumulation.
+        if step % 50 == 0:
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+            logger.info(
+                f"Memory cleared at step {step}. "
+                f"GPU memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f}GB"
+            )
+
         # ── LOGGING ─────────────────────────────────────────────────────────
         if step % 5 == 0:
             logger.info(

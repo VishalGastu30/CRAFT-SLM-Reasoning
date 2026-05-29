@@ -1,46 +1,63 @@
 """
-reward_scorer.py — Component A: Deterministic Execution Verifier (v2)
-Fixed: handles all GSM8K ground truth formats, robust answer extraction,
-       no variable name shadowing that causes SyntaxWarning.
+reward_scorer.py — Component A: Main Reward Scorer
+
+Formula: R_A = 0.4 × final_correct + 0.6 × step_score_value
++ 0.05 bonus if model used correct <thought>/<answer> format.
+
+NAMING CONVENTION:
+- The class method is named 'compute_score()' internally where needed.
+- Local variables that hold score values use suffix '_value' or '_val'.
+- Never assign a float to a variable named 'score' in this file,
+  because the class has a method named 'score()'.
 """
 
 import re
-import ast
 from typing import Tuple
 
+from src.phase2_rl.component_a.execution_verifier import ExecutionVerifier
 
-# ─── GROUND TRUTH EXTRACTION ─────────────────────────────────────────────────
+
+# ─── GROUND TRUTH EXTRACTION ────────────────────────────────────────────────
 
 def extract_ground_truth(question_data: dict) -> str:
     """
-    Extract the numeric/boolean answer from a dataset record.
+    Extract the expected answer from a dataset record.
     
-    Handles:
-    - GSM8K: "Some text\n#### 9"  →  "9"
-    - StrategyQA: True/False/yes/no  →  "yes"/"no"
-    - AQuA-RAT: "correct: (A)" or direct letter  →  letter
-    - Direct numeric string  →  that number
+    Handles all dataset formats this project uses:
+    - GSM8K:     "Some text\n#### 9"              →  "9"
+    - AQuA-RAT:  "correct: (A)" or "A"            →  "A"
+    - StrategyQA: True/False (Python bool/string) →  "yes"/"no"
+    - MMLU:      "0", "1", "2", "3"              →  "A", "B", "C", "D"
+    - Direct number: "42"                         →  "42"
     """
     raw = question_data.get("answer", "")
     raw_str = str(raw).strip()
     
-    # GSM8K format — "#### 42" at end of answer field
+    if not raw_str:
+        return ""
+    
+    # GSM8K format: "#### 42" at end of answer field
     gsm_match = re.search(r'####\s*([\-\+]?\d[\d,]*(?:\.\d+)?)', raw_str)
     if gsm_match:
         return gsm_match.group(1).replace(',', '').strip()
     
-    # StrategyQA — boolean True/False (Python bool or string)
-    if raw_str.lower() in ("true", "yes", "1"):
+    # StrategyQA / boolean
+    lower_raw = raw_str.lower()
+    if lower_raw in ("true", "yes", "1"):
         return "yes"
-    if raw_str.lower() in ("false", "no", "0"):
+    if lower_raw in ("false", "no", "0"):
         return "no"
     
-    # AQuA-RAT — multiple choice letter (A/B/C/D/E)
-    aqua_match = re.search(r'\b([A-E])\b', raw_str)
-    if aqua_match:
-        return aqua_match.group(1).upper()
+    # MMLU numeric index (0→A, 1→B, 2→C, 3→D)
+    if raw_str in ("0", "1", "2", "3"):
+        return ["A", "B", "C", "D"][int(raw_str)]
     
-    # Direct numeric (possibly with commas)
+    # AQuA-RAT letter choice
+    letter_match = re.search(r'\b([A-E])\b', raw_str)
+    if letter_match:
+        return letter_match.group(1).upper()
+    
+    # Direct numeric (possibly with commas or decimals)
     num_match = re.search(r'([\-\+]?\d[\d,]*(?:\.\d+)?)', raw_str)
     if num_match:
         return num_match.group(1).replace(',', '').strip()
@@ -48,65 +65,88 @@ def extract_ground_truth(question_data: dict) -> str:
     return raw_str
 
 
-# ─── MODEL ANSWER EXTRACTION ─────────────────────────────────────────────────
+# ─── MODEL ANSWER EXTRACTION ────────────────────────────────────────────────
 
 def extract_model_answer(response_text: str) -> str:
     """
-    Extract model's final answer from generated text.
-    Tries multiple formats in priority order.
+    Extract the model's final answer from its generated text.
+    
+    Tries formats in priority order — highest confidence first.
+    Always returns a string (empty string if nothing found).
     """
     if not response_text:
         return ""
     
     cleaned = response_text.strip()
     
-    # Priority 1: <answer>X</answer> — the format we trained for
+    # ── Priority 1: <answer>X</answer> ──
+    # This is the format we trained for in SFT. Most reliable.
     xml_match = re.search(
         r'<answer>\s*([\s\S]*?)\s*</answer>',
         cleaned, re.IGNORECASE
     )
     if xml_match:
-        content = xml_match.group(1).strip()
-        # Handle "<answer>The answer is 42</answer>"
-        num = re.search(r'([\-\+]?\d[\d,]*(?:\.\d+)?)', content)
-        if num:
-            return num.group(1).replace(',', '')
-        yesno = re.search(r'\b(yes|no)\b', content, re.IGNORECASE)
-        if yesno:
-            return yesno.group(1).lower()
-        letter = re.search(r'\b([A-E])\b', content)
-        if letter:
-            return letter.group(1).upper()
-        return content
+        inner = xml_match.group(1).strip()
+        
+        # Inner might be "The answer is 42" — extract the number
+        num_inner = re.search(r'([\-\+]?\d[\d,]*(?:\.\d+)?)', inner)
+        if num_inner:
+            return num_inner.group(1).replace(',', '')
+        
+        # Inner might be "yes" or "no"
+        yesno_inner = re.search(r'\b(yes|no)\b', inner, re.IGNORECASE)
+        if yesno_inner:
+            return yesno_inner.group(1).lower()
+        
+        # Inner might be a letter (AQuA-RAT style)
+        letter_inner = re.search(r'\b([A-E])\b', inner)
+        if letter_inner:
+            return letter_inner.group(1).upper()
+        
+        # Return raw inner content as last resort
+        return inner
     
-    # Priority 2: "Final Answer: X" or "The answer is X" or "Answer: X"
-    for patt in [
-        r'(?:final\s+answer|the\s+answer\s+is|answer\s*is|answer\s*:)\s*[:\-]?\s*([\-\+]?\d[\d,]*(?:\.\d+)?)',
+    # ── Priority 2: "Final Answer: X" patterns ──
+    final_answer_patterns = [
+        r'(?:final\s+answer|the\s+answer\s+is|answer\s*:)\s*[:\-]?\s*([\-\+]?\d[\d,]*(?:\.\d+)?)',
         r'(?:final\s+answer|answer)\s*[:\-]?\s*\*{0,2}([\-\+]?\d[\d,]*(?:\.\d+)?)\*{0,2}',
+        r'(?:therefore|thus|so)[,\s]+(?:the\s+answer\s+is\s+)?([\-\+]?\d[\d,]*(?:\.\d+)?)',
         r'(?:final\s+answer|answer)\s*[:\-]?\s*(yes|no)\b',
         r'(?:final\s+answer|answer)\s*[:\-]?\s*([A-E])\b',
-    ]:
-        m = re.search(patt, cleaned, re.IGNORECASE)
-        if m:
-            return m.group(1).strip().replace(',', '')
+    ]
+    for patt in final_answer_patterns:
+        match_found = re.search(patt, cleaned, re.IGNORECASE)
+        if match_found:
+            extracted_val = match_found.group(1).strip().replace(',', '')
+            return extracted_val
     
-    # Priority 3: "= 42" at end of a line (common in step-by-step)
-    eq_end = re.search(r'=\s*([\-\+]?\d[\d,]*(?:\.\d+)?)\s*$', cleaned, re.MULTILINE)
-    if eq_end:
-        return eq_end.group(1).replace(',', '')
+    # ── Priority 3: GSM8K native #### format ──
+    gsm_match = re.search(r'####\s*([\-\+]?\d[\d,]*(?:\.\d+)?)', cleaned)
+    if gsm_match:
+        return gsm_match.group(1).replace(',', '')
     
-    # Priority 4: Last number that appears AFTER any </thought> block
-    after_thought = re.sub(r'<thought>[\s\S]*?</thought>', '', cleaned, flags=re.IGNORECASE)
-    numbers = re.findall(r'([\-\+]?\d[\d,]*(?:\.\d+)?)', after_thought)
-    if numbers:
-        return numbers[-1].replace(',', '')
+    # ── Priority 4: "= X" at end of a step line ──
+    eq_end_match = re.search(
+        r'=\s*([\-\+]?\d[\d,]*(?:\.\d+)?)\s*$',
+        cleaned, re.MULTILINE
+    )
+    if eq_end_match:
+        return eq_end_match.group(1).replace(',', '')
     
-    # Priority 5: Any yes/no after thought block
-    yesno = re.search(r'\b(yes|no)\b', after_thought, re.IGNORECASE)
-    if yesno:
-        return yesno.group(1).lower()
+    # ── Priority 5: Any number appearing AFTER </thought> ──
+    after_thought = re.sub(
+        r'<thought>[\s\S]*?</thought>', '', cleaned, flags=re.IGNORECASE
+    )
+    after_nums = re.findall(r'([\-\+]?\d[\d,]*(?:\.\d+)?)', after_thought)
+    if after_nums:
+        return after_nums[-1].replace(',', '')
     
-    # Priority 6: Last number anywhere in response (last resort)
+    # ── Priority 6: yes/no anywhere after thought ──
+    yesno_after = re.search(r'\b(yes|no)\b', after_thought, re.IGNORECASE)
+    if yesno_after:
+        return yesno_after.group(1).lower()
+    
+    # ── Priority 7: Last number anywhere (absolute last resort) ──
     all_nums = re.findall(r'([\-\+]?\d[\d,]*(?:\.\d+)?)', cleaned)
     if all_nums:
         return all_nums[-1].replace(',', '')
@@ -114,30 +154,36 @@ def extract_model_answer(response_text: str) -> str:
     return ""
 
 
-# ─── ANSWER COMPARISON ───────────────────────────────────────────────────────
+# ─── ANSWER COMPARISON ──────────────────────────────────────────────────────
 
-def answers_match(model_ans: str, ground_truth: str) -> bool:
+def answers_match(model_answer: str, ground_truth: str) -> bool:
     """
-    Compare model answer to ground truth.
-    Handles numeric tolerance, boolean synonyms, letter choices.
+    Compare extracted model answer to ground truth.
     
-    Note: parameter named model_ans not 'score' to avoid shadowing function names.
+    Handles:
+    - Numeric values with tolerance (3.999 ≈ 4.000)
+    - Boolean synonyms (yes/true/correct all match each other)
+    - Multiple-choice letters (A, B, C, D, E)
+    - Exact string match as fallback
+    
+    Note: parameters named 'model_answer' and 'ground_truth' not 'score'
+    to prevent any variable shadowing risk.
     """
-    if not model_ans or not ground_truth:
+    if not model_answer or not ground_truth:
         return False
     
-    ma = model_ans.strip().lower().replace(',', '')
-    gt = ground_truth.strip().lower().replace(',', '')
+    ma_clean = model_answer.strip().lower().replace(',', '')
+    gt_clean = ground_truth.strip().lower().replace(',', '')
     
-    # Exact string match
-    if ma == gt:
+    # Exact match (handles letters like A, B, yes, no)
+    if ma_clean == gt_clean:
         return True
     
     # Numeric comparison with tolerance
     try:
-        ma_num = float(ma)
-        gt_num = float(gt)
-        # Use relative tolerance for large numbers, absolute for small
+        ma_num = float(ma_clean)
+        gt_num = float(gt_clean)
+        # Relative tolerance for large numbers, absolute for small
         if abs(gt_num) > 1.0:
             return abs(ma_num - gt_num) / (abs(gt_num) + 1e-9) < 0.01
         return abs(ma_num - gt_num) < 0.01
@@ -145,102 +191,24 @@ def answers_match(model_ans: str, ground_truth: str) -> bool:
         pass
     
     # Boolean synonym groups
-    yes_group = {"yes", "true", "correct", "1", "right"}
-    no_group = {"no", "false", "incorrect", "0", "wrong"}
-    if ma in yes_group and gt in yes_group:
+    affirmative = {"yes", "true", "correct", "1", "right"}
+    negative = {"no", "false", "incorrect", "0", "wrong"}
+    if ma_clean in affirmative and gt_clean in affirmative:
         return True
-    if ma in no_group and gt in no_group:
+    if ma_clean in negative and gt_clean in negative:
         return True
     
     return False
 
 
-# ─── STEP SCORING ────────────────────────────────────────────────────────────
-
-def safe_eval_math(expr: str) -> Tuple[bool, float]:
-    """
-    Safely evaluate a math expression like '3 + 4 * 2'.
-    Only allows digits and arithmetic operators.
-    Returns (success, result).
-    
-    Note: function named safe_eval_math not 'score' to avoid name collisions.
-    """
-    # Whitelist check — only allow safe chars
-    sanitized = expr.strip().replace(',', '')
-    if not re.match(r'^[\d\s\+\-\*\/\(\)\.]+$', sanitized):
-        return False, 0.0
-    
-    # Try literal eval first (handles pure numbers)
-    try:
-        result = ast.literal_eval(sanitized)
-        return True, float(result)
-    except (ValueError, SyntaxError):
-        pass
-    
-    # Restricted eval for arithmetic
-    try:
-        result = eval(sanitized, {"__builtins__": {}})  # nosec
-        return True, float(result)
-    except Exception:
-        return False, 0.0
-
-
-def score_reasoning_steps(steps: list) -> float:
-    """
-    Score reasoning steps by checking arithmetic correctness.
-    Looks for patterns like '3 + 4 = 7' and verifies the equality.
-    Returns 0.0 to 1.0.
-    
-    Note: function named score_reasoning_steps (not 'score') to avoid
-    variable shadowing that causes SyntaxWarning.
-    """
-    if not steps:
-        return 0.5  # Neutral: can't verify what isn't there
-    
-    total_checkable = 0
-    total_correct = 0
-    
-    for step_text in steps:
-        # Find "expression = claimed_result" patterns
-        # e.g. "3 + 4 = 7" or "15 × 4 = 60"
-        matches = re.findall(
-            r'([\d\s\+\-\*\/\(\)\.]+)\s*=\s*([\d\.\-\+,]+)',
-            step_text
-        )
-        
-        for left_side, right_side in matches:
-            left_clean = left_side.strip()
-            right_clean = right_side.strip().replace(',', '')
-            
-            # Skip trivial: if left side is just a single number, skip
-            if re.match(r'^\s*[\d\.]+\s*$', left_clean):
-                continue
-            
-            ok, computed_val = safe_eval_math(left_clean)
-            if not ok:
-                continue
-            
-            try:
-                claimed_val = float(right_clean)
-            except ValueError:
-                continue
-            
-            total_checkable += 1
-            if abs(computed_val - claimed_val) < 0.01:
-                total_correct += 1
-    
-    if total_checkable == 0:
-        return 0.5  # No checkable steps — neutral score
-    
-    return total_correct / total_checkable
-
-
-# ─── STEP EXTRACTION ─────────────────────────────────────────────────────────
+# ─── STEP EXTRACTION ────────────────────────────────────────────────────────
 
 def extract_steps(response_text: str) -> list:
     """
     Extract individual reasoning steps from model output.
-    Handles <thought> blocks and "Step N:" format and numbered lists.
+    
+    Returns a list of step strings. Each string is one reasoning step.
+    Returns at least [response_text] if no step structure is found.
     """
     if not response_text:
         return []
@@ -253,66 +221,84 @@ def extract_steps(response_text: str) -> list:
     working = thought_match.group(1).strip() if thought_match else response_text
     
     # Remove <answer> section from working text
-    working = re.sub(r'<answer>[\s\S]*?</answer>', '', working, flags=re.IGNORECASE).strip()
+    working = re.sub(
+        r'<answer>[\s\S]*?</answer>', '', working, flags=re.IGNORECASE
+    ).strip()
     
     # Try "Step N:" splits
-    splits = re.split(r'\bStep\s+\d+\s*[:\-]\s*', working)
-    splits = [s.strip() for s in splits if len(s.strip()) > 5]
-    if len(splits) >= 2:
-        return splits
+    step_splits = re.split(r'\bStep\s+\d+\s*[:\-]\s*', working)
+    step_splits = [s.strip() for s in step_splits if len(s.strip()) > 5]
+    if len(step_splits) >= 2:
+        return step_splits
     
     # Try numbered list "1. " "2. "
-    splits = re.split(r'(?m)^\s*\d+\.\s+', working)
-    splits = [s.strip() for s in splits if len(s.strip()) > 5]
-    if len(splits) >= 2:
-        return splits
+    num_splits = re.split(r'(?m)^\s*\d+\.\s+', working)
+    num_splits = [s.strip() for s in num_splits if len(s.strip()) > 5]
+    if len(num_splits) >= 2:
+        return num_splits
     
     # Fallback: line by line
-    lines = [l.strip() for l in working.split('\n') if len(l.strip()) > 5]
+    lines = [line.strip() for line in working.split('\n') if len(line.strip()) > 5]
     return lines if lines else [working]
 
 
-# ─── MAIN SCORER CLASS ───────────────────────────────────────────────────────
+# ─── MAIN SCORER CLASS ──────────────────────────────────────────────────────
 
 class RewardScorer:
     """
     Component A: Scores model responses using deterministic verification.
-    Formula: R_A = 0.4 × final_correct + 0.6 × step_score
+    
+    Formula: R_A = 0.4 × final_correct + 0.6 × step_score_value
+    Bonus:   +0.05 if model uses <thought> and <answer> tags correctly
+    
+    Usage:
+        scorer = RewardScorer()
+        reward_val, is_correct = scorer.score_with_success(question, response)
     """
-
+    
+    def __init__(self):
+        self._verifier = ExecutionVerifier()
+    
     def score(self, question_data: dict, response_text: str) -> float:
-        """Return just the reward float."""
+        """Return just the reward float. Calls score_with_success internally."""
         reward_val, _ = self.score_with_success(question_data, response_text)
         return reward_val
-
+    # Note: local variable is 'reward_val' not 'score' — prevents shadowing.
+    
     def score_with_success(
-        self, question_data: dict, response_text: str
+        self,
+        question_data: dict,
+        response_text: str
     ) -> Tuple[float, bool]:
         """
-        Returns (reward_score, is_final_answer_correct).
+        Score a model response against a question.
         
-        reward_score: 0.0 to 1.0
-        is_final_answer_correct: True only if model's answer matches ground truth
+        Returns:
+            (reward_score, is_final_answer_correct)
+            reward_score: float 0.0 to 1.0
+            is_final_answer_correct: bool — used for mean_success logging
         """
         if not response_text or len(response_text.strip()) < 3:
             return 0.1, False
         
-        # Extract answers
+        # Extract ground truth and model answer
         ground_truth = extract_ground_truth(question_data)
-        model_ans = extract_model_answer(response_text)
+        model_answer = extract_model_answer(response_text)
         
-        # Check correctness
-        is_correct = answers_match(model_ans, ground_truth)
+        # Check if final answer is correct
+        is_correct = answers_match(model_answer, ground_truth)
         
-        # Score steps
+        # Score reasoning steps
         steps = extract_steps(response_text)
-        step_reward = score_reasoning_steps(steps)
+        step_score_value = self._verifier.score_steps(steps)
         
         # Combined reward
-        R_A = 0.4 * float(is_correct) + 0.6 * step_reward
+        R_A = 0.4 * float(is_correct) + 0.6 * step_score_value
         
-        # Small bonus for correct format
-        if '<thought>' in response_text.lower() and '<answer>' in response_text.lower():
+        # Format bonus
+        has_thought = '<thought>' in response_text.lower()
+        has_answer = '<answer>' in response_text.lower()
+        if has_thought and has_answer:
             R_A = min(1.0, R_A + 0.05)
         
         return R_A, is_correct
