@@ -382,7 +382,7 @@ def _validate_paths_before_training(config):
     """
     required_paths = {
         "SFT checkpoint": config.get("sft_checkpoint_path", "checkpoints/sft/final"),
-        "Difficulty map": config.get("difficulty_map_path", "data/difficulty_map.json"),
+        "Difficulty map": config.get("difficulty_map_path", "difficulty_map.json"),
     }
     
     missing = []
