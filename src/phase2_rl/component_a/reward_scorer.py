@@ -7,6 +7,7 @@ No neural reward model. Zero reward noise for arithmetic.
 import re
 import ast
 import math
+import warnings
 from typing import Tuple
 
 
@@ -143,7 +144,9 @@ def safe_eval_expression(expr_str: str) -> Tuple[bool, float]:
     try:
         # Restricted eval: only math operations
         allowed = {"__builtins__": {}}
-        result = eval(cleaned, allowed)  # nosec (sanitized above)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=SyntaxWarning)
+            result = eval(cleaned, allowed)  # nosec (sanitized above)
         return True, float(result)
     except Exception:
         return False, 0.0
