@@ -37,7 +37,9 @@ def verify_arithmetic(expression: str) -> Tuple[bool, float]:
     sanitized = expression.strip().replace(',', '').replace('×', '*').replace('÷', '/')
     
     # Whitelist check — reject anything that looks suspicious
-    if not re.match(r'^[\d\s\+\-\*\/\(\)\.]+$', sanitized):
+    # We explicitly reject '**' to prevent exponentiation bombs (e.g. 9**9**9)
+    # which will instantly OOM the CPU and crash the Kaggle kernel.
+    if '**' in sanitized or not re.match(r'^[\d\s\+\-\*\/\(\)\.]+$', sanitized):
         return False, 0.0
     
     # Guard against empty or trivial expressions
