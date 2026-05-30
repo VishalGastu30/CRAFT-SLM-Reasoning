@@ -120,7 +120,7 @@ class BenchmarkEvaluator:
                     base_model_id,
                     torch_dtype=torch.float16 if device == "cuda" else torch.float32,
                     device_map="auto" if device == "cuda" else None,
-                    trust_remote_code=True
+                    trust_remote_code=False
                 )
                 model = PeftModel.from_pretrained(base_model, model_path).to(device)
             else:
@@ -128,7 +128,7 @@ class BenchmarkEvaluator:
                     model_path,
                     torch_dtype=torch.float16 if device == "cuda" else torch.float32,
                     device_map="auto" if device == "cuda" else None,
-                    trust_remote_code=True
+                    trust_remote_code=False
                 ).to(device)
                 
             model.eval()

@@ -32,7 +32,7 @@ def merge_lora(base_model_name_or_path, lora_adapter_path, output_dir):
         base_model_name_or_path,
         torch_dtype=torch.float16 if device == "cuda" else torch.float32,
         device_map="auto" if device == "cuda" else "cpu",
-        trust_remote_code=True
+        trust_remote_code=False
     )
     
     # Load LoRA model
