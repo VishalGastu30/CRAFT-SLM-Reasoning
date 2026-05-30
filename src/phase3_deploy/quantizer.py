@@ -38,13 +38,30 @@ def merge_lora(base_model_name_or_path, lora_adapter_path, output_dir):
     # Load LoRA model
     model = PeftModel.from_pretrained(base_model, lora_adapter_path)
     
+    # Load tokenizer from base model to ensure we get the full tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+        base_model_name_or_path,
+        trust_remote_code=False
+    )
+    
     # Merge weights
     merged_model = model.merge_and_unload()
     
     # Save merged model and tokenizer
     os.makedirs(output_dir, exist_ok=True)
+    logger.info(f"Saving merged model to {output_dir}")
     merged_model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
+    
+    # Explicitly ensure tokenizer.model exists (llama.cpp needs it for Phi-3)
+    tokenizer_model_path = os.path.join(output_dir, "tokenizer.model")
+    if not os.path.exists(tokenizer_model_path):
+        logger.info("Explicitly downloading tokenizer.model for llama.cpp compatibility...")
+        try:
+            from huggingface_hub import hf_hub_download
+            hf_hub_download(repo_id=base_model_name_or_path, filename="tokenizer.model", local_dir=output_dir)
+        except Exception as e:
+            logger.warning(f"Failed to download tokenizer.model: {e}")
     
     logger.info(f"Merged model successfully saved to {output_dir}")
 
