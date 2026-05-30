@@ -122,14 +122,18 @@ class BenchmarkEvaluator:
                     device_map="auto" if device == "cuda" else None,
                     trust_remote_code=False
                 )
-                model = PeftModel.from_pretrained(base_model, model_path).to(device)
+                model = PeftModel.from_pretrained(base_model, model_path)
+                if device == "cpu":
+                    model = model.to("cpu")
             else:
                 model = AutoModelForCausalLM.from_pretrained(
                     model_path,
                     torch_dtype=torch.float16 if device == "cuda" else torch.float32,
                     device_map="auto" if device == "cuda" else None,
                     trust_remote_code=False
-                ).to(device)
+                )
+                if device == "cpu":
+                    model = model.to("cpu")
                 
             model.eval()
         elif model_type == "gguf":
