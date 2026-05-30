@@ -82,6 +82,12 @@ class StepDPOTrainer:
         Computes the mean DPO loss over a list of contrastive pairs.
         Wrapper compatibility method matching the new craft_rl_loop interface.
         """
+        import random
+        # To prevent OOM, limit the number of pairs processed per step.
+        # Each pair requires 2 forward passes that stay in the computation graph.
+        if len(contrastive_pairs) > 2:
+            contrastive_pairs = random.sample(contrastive_pairs, 2)
+            
         dpo_losses = []
         for pair in contrastive_pairs:
             loss = self.compute_dpo_loss(
