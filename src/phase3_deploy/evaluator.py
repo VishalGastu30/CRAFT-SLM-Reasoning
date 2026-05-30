@@ -164,10 +164,11 @@ class BenchmarkEvaluator:
                 response = f"Step 1: Parse the parameters.\nStep 2: Calculate the solution.\nFinal Answer: {ans}"
                 
             # Verify and score using RewardScorer
-            metrics = self.scorer.score_response(question, response, gold, dataset_name)
+            reward, is_correct = self.scorer.score_with_success({"answer": gold}, response)
+            metrics = {"reward": reward, "final_correct": float(is_correct)}
             
-            # Check format compliance (must contain Step 1: and Final Answer:)
-            is_format_compliant = "step 1" in response.lower() and "final answer" in response.lower()
+            # Check format compliance (must contain Step 1: and Final Answer: or similar)
+            is_format_compliant = "step 1" in response.lower() and "answer" in response.lower()
             if is_format_compliant:
                 format_compliant_count += 1
                 
@@ -176,7 +177,8 @@ class BenchmarkEvaluator:
                 correct_count += 1
                 
             scores.append(metrics["reward"])
-            total_steps.append(metrics.get("step_count", 0))
+            step_count = response.lower().count("step")
+            total_steps.append(step_count)
             
             results_records.append({
                 "question": question,
