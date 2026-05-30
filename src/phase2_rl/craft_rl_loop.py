@@ -97,6 +97,8 @@ def load_model_and_tokenizer(
         sft_adapter_path,
         is_trainable=True,   # CRITICAL: must be True for RL training
     )
+    # Enable gradient checkpointing to drastically save VRAM during forward passes
+    policy_model.gradient_checkpointing_enable()
     
     # Verify that LoRA parameters require gradients
     lora_params_with_grad = sum(
