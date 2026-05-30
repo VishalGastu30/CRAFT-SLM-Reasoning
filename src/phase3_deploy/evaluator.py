@@ -152,7 +152,14 @@ class BenchmarkEvaluator:
         elif model_type == "gguf":
             logger.info(f"Loading GGUF model from: {model_path}")
             from llama_cpp import Llama
-            llm = Llama(model_path=model_path, verbose=False)
+            kwargs = {
+                "model_path": model_path,
+                "verbose": False,
+                "n_ctx": 4096
+            }
+            if self.use_gpu:
+                kwargs["n_gpu_layers"] = -1
+            llm = Llama(**kwargs)
         else:
             logger.info("Running evaluation in mock mode.")
             
