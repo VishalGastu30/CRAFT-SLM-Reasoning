@@ -35,7 +35,14 @@ class BenchmarkEvaluator:
                 return samples
             elif dataset_name == "strategyqa":
                 # For StrategyQA, load from hub or fallback
-                ds = load_dataset("wiz-a/strategyqa", split="train") # wiz-a strategyqa commonly available
+                # Try multiple StrategyQA sources
+                try:
+                    ds = load_dataset("wics/strategy-qa", split="test")
+                except Exception:
+                    try:
+                        ds = load_dataset("wiz-a/strategyqa", split="train")
+                    except Exception:
+                        raise ValueError("Could not load StrategyQA from any known source")
                 samples = []
                 for item in list(ds)[:num_samples]:
                     samples.append({
@@ -68,8 +75,14 @@ class BenchmarkEvaluator:
     def generate_hf_response(self, model, tokenizer, prompt: str) -> str:
         """Generates response using PyTorch Hugging Face model."""
         import torch
-        device = "cuda" if torch.cuda.is_available() and self.use_gpu else "cpu"
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
+        # When using device_map="auto", send inputs to the model's first parameter's device
+        if hasattr(model, 'hf_device_map'):
+            first_device = next(model.parameters()).device
+        elif torch.cuda.is_available() and self.use_gpu:
+            first_device = torch.device("cuda")
+        else:
+            first_device = torch.device("cpu")
+        inputs = tokenizer(prompt, return_tensors="pt").to(first_device)
         
         with torch.no_grad():
             outputs = model.generate(
