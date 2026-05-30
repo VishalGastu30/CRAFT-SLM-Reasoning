@@ -29,18 +29,12 @@ class ContrastiveBuilder:
             for s in steps:
                 step_text = s["content"]
                 # Evaluate step math correctness
-                from src.phase2_rl.component_a.execution_verifier import extract_math_expressions, verify_expression
-                eqs = extract_math_expressions(step_text)
-                if not eqs:
+                from src.phase2_rl.component_a.execution_verifier import verify_step_arithmetic
+                correct_count, total_count = verify_step_arithmetic(step_text)
+                if total_count == 0:
                     step_rewards.append(1.0) # Assume non-math text steps are correct
-                    continue
-                
-                step_ok = True
-                for lhs, rhs in eqs:
-                    if not verify_expression(lhs, rhs):
-                        step_ok = False
-                        break
-                step_rewards.append(1.0 if step_ok else 0.0)
+                else:
+                    step_rewards.append(1.0 if correct_count == total_count else 0.0)
                 
             parsed_traces.append({
                 "trace_text": text,
