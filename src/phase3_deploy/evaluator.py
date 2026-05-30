@@ -101,14 +101,36 @@ class BenchmarkEvaluator:
             logger.info(f"Loading HF model/tokenizer from: {model_path}")
             from transformers import AutoTokenizer, AutoModelForCausalLM
             import torch
+            import json
+            
             tokenizer = AutoTokenizer.from_pretrained(model_path)
             device = "cuda" if torch.cuda.is_available() and self.use_gpu else "cpu"
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map="auto" if device == "cuda" else None,
-                trust_remote_code=True
-            ).to(device)
+            
+            # Check if this is a PEFT adapter by looking for adapter_config.json
+            is_peft = os.path.exists(os.path.join(model_path, "adapter_config.json"))
+            
+            if is_peft:
+                logger.info("Detected PEFT adapter. Loading base model first...")
+                from peft import PeftModel
+                with open(os.path.join(model_path, "adapter_config.json"), "r") as f:
+                    config = json.load(f)
+                base_model_id = config.get("base_model_name_or_path", "microsoft/Phi-3-mini-4k-instruct")
+                
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    base_model_id,
+                    torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                    device_map="auto" if device == "cuda" else None,
+                    trust_remote_code=True
+                )
+                model = PeftModel.from_pretrained(base_model, model_path).to(device)
+            else:
+                model = AutoModelForCausalLM.from_pretrained(
+                    model_path,
+                    torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                    device_map="auto" if device == "cuda" else None,
+                    trust_remote_code=True
+                ).to(device)
+                
             model.eval()
         elif model_type == "gguf":
             logger.info(f"Loading GGUF model from: {model_path}")
