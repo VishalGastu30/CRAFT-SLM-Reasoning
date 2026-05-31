@@ -1,275 +1,419 @@
+"""
+evaluator.py — Phase 3 CRAFT Benchmark Evaluator
+Evaluates base model and CRAFT checkpoints on GSM8K + StrategyQA.
+Uses consistent HF-format evaluation for fair comparison across all checkpoints.
+"""
+
 import os
 import sys
 import json
+import re
 import argparse
 import numpy as np
 from loguru import logger
 
-from src.phase2_rl.component_a.reward_scorer import RewardScorer
-from src.phase0_probe.sampler import extract_final_answer, check_answer_correct
 
 class BenchmarkEvaluator:
     """
-    Evaluates SLM reasoning models (Base, SFT, and CRAFT RL) 
-    on mathematical (GSM8K) and logical (StrategyQA) benchmarks.
+    Evaluates models on GSM8K and StrategyQA.
+    Supports HF transformers models (for checkpoint sweep) and
+    GGUF llama-cpp models (for final deployment verification only).
     """
-    def __init__(self, use_gpu=False):
-        self.scorer = RewardScorer()
+
+    def __init__(self, use_gpu=True):
         self.use_gpu = use_gpu
 
-    def load_test_dataset(self, dataset_name="gsm8k", num_samples=50) -> list:
-        """Loads evaluation dataset with failproof fallbacks for offline testing."""
-        logger.info(f"Loading test samples for dataset: {dataset_name} (samples={num_samples})")
-        
+    # ─── DATASET LOADING ─────────────────────────────────────────────────────
+
+    def load_test_dataset(self, dataset_name: str, num_samples: int) -> list:
+        logger.info(f"Loading {num_samples} samples from {dataset_name}...")
         try:
             from datasets import load_dataset
             if dataset_name == "gsm8k":
                 ds = load_dataset("gsm8k", "main", split="test")
                 samples = []
                 for item in list(ds)[:num_samples]:
+                    # Pre-strip the #### prefix so ground truth is just the number
+                    raw_answer = item["answer"]
+                    if "####" in raw_answer:
+                        gt = raw_answer.split("####")[-1].strip()
+                    else:
+                        gt = raw_answer.strip()
                     samples.append({
                         "question": item["question"],
-                        "answer": item["answer"].split("####")[-1].strip(),
+                        "answer": gt,
                         "dataset": "gsm8k"
                     })
                 return samples
+
             elif dataset_name == "strategyqa":
-                # For StrategyQA, load from hub or fallback
-                # Try multiple StrategyQA sources
-                try:
-                    ds = load_dataset("wics/strategy-qa", split="test")
-                except Exception:
+                for source in ["wics/strategy-qa", "ChilleD/StrategyQA"]:
                     try:
-                        ds = load_dataset("ChilleD/StrategyQA", split="test")
+                        ds = load_dataset(source, split="test")
+                        samples = []
+                        for item in list(ds)[:num_samples]:
+                            # StrategyQA stores answers as Python booleans or strings
+                            raw = item.get("answer", item.get("label", False))
+                            if isinstance(raw, bool):
+                                gt = "yes" if raw else "no"
+                            elif str(raw).lower() in ("true", "1", "yes"):
+                                gt = "yes"
+                            else:
+                                gt = "no"
+                            samples.append({
+                                "question": item["question"],
+                                "answer": gt,
+                                "dataset": "strategyqa"
+                            })
+                        return samples
                     except Exception:
-                        try:
-                            ds = load_dataset("wiz-a/strategyqa", split="train")
-                        except Exception:
-                            raise ValueError("Could not load StrategyQA from any known source")
-                samples = []
-                for item in list(ds)[:num_samples]:
-                    samples.append({
-                        "question": item["question"],
-                        "answer": "yes" if item["answer"] else "no",
-                        "dataset": "strategyqa"
-                    })
-                return samples
+                        continue
+                raise RuntimeError("Could not load StrategyQA from any known source")
+
         except Exception as e:
-            logger.warning(f"Could not load dataset {dataset_name} via datasets API: {e}. Falling back to high-quality local mock data!")
-            
-        # Fallback high quality mocks
+            logger.warning(f"Dataset loading failed: {e}. Using fallback samples.")
+            return self._fallback_samples(dataset_name, num_samples)
+
+    def _fallback_samples(self, dataset_name: str, num_samples: int) -> list:
+        """High-quality fallback samples for offline testing."""
         if dataset_name == "gsm8k":
-            return [
-                {"question": "John has 3 books. He buys 2 more. How many books does he have?", "answer": "5", "dataset": "gsm8k"},
-                {"question": "What is 15% of 240?", "answer": "36", "dataset": "gsm8k"},
-                {"question": "If a shirt costs $20 and is on a 20% discount, what is the final price?", "answer": "16", "dataset": "gsm8k"},
-                {"question": "A train travels at 60 mph for 3 hours. How far does it go?", "answer": "180", "dataset": "gsm8k"},
-                {"question": "Evaluate 10 + 5 * 2.", "answer": "20", "dataset": "gsm8k"}
-            ] * (num_samples // 5 + 1)
+            base = [
+                {"question": "John has 3 books. He buys 4 more. How many does he have?", "answer": "7", "dataset": "gsm8k"},
+                {"question": "A train travels at 60 mph for 2.5 hours. How far does it go?", "answer": "150", "dataset": "gsm8k"},
+                {"question": "What is 15% of 200?", "answer": "30", "dataset": "gsm8k"},
+                {"question": "A shirt costs $25 and is 20% off. What is the sale price?", "answer": "20", "dataset": "gsm8k"},
+                {"question": "There are 5 boxes with 8 apples each. How many apples total?", "answer": "40", "dataset": "gsm8k"},
+                {"question": "If 3 workers finish a job in 12 days, how long for 4 workers?", "answer": "9", "dataset": "gsm8k"},
+            ]
         else:
-            return [
+            base = [
                 {"question": "Would a penguin survive in the Sahara desert?", "answer": "no", "dataset": "strategyqa"},
-                {"question": "Can a human walk on water without aid?", "answer": "no", "dataset": "strategyqa"},
                 {"question": "Is Beijing the capital of China?", "answer": "yes", "dataset": "strategyqa"},
-                {"question": "Do dogs bark?", "answer": "yes", "dataset": "strategyqa"},
-                {"question": "Is the moon made of green cheese?", "answer": "no", "dataset": "strategyqa"}
-            ] * (num_samples // 5 + 1)
+                {"question": "Can humans breathe underwater without equipment?", "answer": "no", "dataset": "strategyqa"},
+                {"question": "Did Shakespeare write Hamlet?", "answer": "yes", "dataset": "strategyqa"},
+            ]
+        # Repeat to reach num_samples
+        result = (base * ((num_samples // len(base)) + 1))[:num_samples]
+        return result
+
+    # ─── PROMPT FORMATTING ────────────────────────────────────────────────────
+
+    def format_prompt(self, question: str, tokenizer) -> str:
+        """
+        Format prompt to EXACTLY match Phase 1 SFT training format.
+        The SFT model was trained to produce <thought>...</thought><answer>X</answer>.
+        If you change this prompt, the model outputs in a different format and
+        your answer extraction breaks completely.
+        """
+        system_prompt = (
+            "You are a careful mathematical and logical reasoner. "
+            "Solve the problem step by step inside <thought> tags. "
+            "Write each step on a new line starting with 'Step N: '. "
+            "Put ONLY the final answer (a number or yes/no) inside <answer> tags.\n\n"
+            "Example:\n"
+            "<thought>\nStep 1: [reasoning]\nStep 2: [reasoning]\n</thought>\n"
+            "<answer>42</answer>"
+        )
+        try:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Problem: {question}\n\nSolve step by step:"}
+            ]
+            return tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+        except Exception:
+            # Fallback if tokenizer has no chat template
+            return f"{system_prompt}\n\nProblem: {question}\n\nSolve step by step:"
+
+    # ─── ANSWER EXTRACTION ────────────────────────────────────────────────────
+
+    def extract_model_answer(self, response_text: str) -> str:
+        """
+        Extract final answer from model output.
+        Handles <answer> XML tags, 'Final Answer:' format, and last-number fallback.
+        """
+        if not response_text:
+            return ""
+        text = response_text.strip()
+
+        # Priority 1: <answer>X</answer>
+        xml = re.search(r'<answer>\s*([\s\S]*?)\s*</answer>', text, re.IGNORECASE)
+        if xml:
+            content = xml.group(1).strip().replace(',', '')
+            num = re.search(r'([\-\+]?\d+(?:\.\d+)?)', content)
+            if num:
+                return num.group(1)
+            yn = re.search(r'\b(yes|no)\b', content, re.IGNORECASE)
+            if yn:
+                return yn.group(1).lower()
+            return content
+
+        # Priority 2: "Final Answer: X" or "The answer is X"
+        for pat in [
+            r'(?:final\s+answer|the\s+answer\s+is|answer\s*:)[:\s]*\*{0,2}([\-\+]?\d[\d,]*(?:\.\d+)?)\*{0,2}',
+            r'(?:final\s+answer|answer)\s*[:\-]?\s*(yes|no)\b',
+        ]:
+            m = re.search(pat, text, re.IGNORECASE)
+            if m:
+                return m.group(1).strip().replace(',', '')
+
+        # Priority 3: Last number after any </thought> block
+        no_thought = re.sub(r'<thought>[\s\S]*?</thought>', '', text, flags=re.IGNORECASE)
+        nums = re.findall(r'([\-\+]?\d[\d,]*(?:\.\d+)?)', no_thought)
+        if nums:
+            return nums[-1].replace(',', '')
+
+        # Priority 4: yes/no anywhere
+        yn = re.search(r'\b(yes|no)\b', text, re.IGNORECASE)
+        if yn:
+            return yn.group(1).lower()
+
+        return ""
+
+    def answers_match(self, predicted: str, ground_truth: str) -> bool:
+        """Compare predicted answer to ground truth with numeric tolerance."""
+        if not predicted or not ground_truth:
+            return False
+        p = predicted.strip().lower().replace(',', '')
+        g = ground_truth.strip().lower().replace(',', '')
+        if p == g:
+            return True
+        try:
+            return abs(float(p) - float(g)) < 0.01
+        except (ValueError, TypeError):
+            pass
+        yes_set = {"yes", "true", "1"}
+        no_set = {"no", "false", "0"}
+        if p in yes_set and g in yes_set:
+            return True
+        if p in no_set and g in no_set:
+            return True
+        return False
+
+    # ─── MODEL GENERATION ────────────────────────────────────────────────────
 
     def generate_hf_response(self, model, tokenizer, prompt: str) -> str:
-        """Generates response using PyTorch Hugging Face model."""
         import torch
-        # When using device_map="auto", send inputs to the model's first parameter's device
-        if hasattr(model, 'hf_device_map'):
-            first_device = next(model.parameters()).device
-        elif torch.cuda.is_available() and self.use_gpu:
-            first_device = torch.device("cuda")
-        else:
-            first_device = torch.device("cpu")
-        inputs = tokenizer(prompt, return_tensors="pt").to(first_device)
-        
+        device = next(model.parameters()).device
+        inputs = tokenizer(
+            prompt, return_tensors="pt", truncation=True, max_length=512
+        ).to(device)
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=256,
-                do_sample=False, # Greedier decoding for evaluation consistency
-                pad_token_id=tokenizer.eos_token_id
+                do_sample=False,  # Greedy for reproducibility
+                temperature=1.0,
+                pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=tokenizer.eos_token_id,
             )
-        return tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+        response = tokenizer.decode(
+            outputs[0][inputs["input_ids"].shape[1]:],
+            skip_special_tokens=True
+        )
+        return response
 
     def generate_gguf_response(self, llm, prompt: str) -> str:
-        """Generates response using local GGUF llama.cpp model."""
-        result = llm(prompt, max_tokens=256, temperature=0.0) # Greedy
+        result = llm(prompt, max_tokens=256, temperature=0.0)
         return result["choices"][0]["text"].strip()
 
-    def evaluate_model(self, model_type="hf", model_path=None, dataset_name="gsm8k", num_samples=20) -> dict:
+    # ─── MAIN EVALUATION ─────────────────────────────────────────────────────
+
+    def evaluate_checkpoint(
+        self,
+        model_path: str,
+        dataset_name: str,
+        num_samples: int,
+        checkpoint_label: str = "model",
+        model_type: str = "hf",
+    ) -> dict:
         """
-        Runs evaluation on the specified model and dataset.
-        model_type: 'hf' (HuggingFace Transformers model) or 'gguf' (llama-cpp-python GGUF path) or 'mock'
+        Evaluate a single model checkpoint on one dataset.
+        Returns a dict with accuracy, format_compliance, avg_steps, records.
+        
+        model_type: 'hf' for HuggingFace transformers, 'gguf' for llama.cpp GGUF.
+        Always use 'hf' for the checkpoint sweep. Only use 'gguf' for final verification.
         """
         samples = self.load_test_dataset(dataset_name, num_samples)[:num_samples]
-        
-        # Load Model
+        logger.info(f"Evaluating [{checkpoint_label}] on {dataset_name} ({len(samples)} samples)...")
+
+        import torch
         model = None
         tokenizer = None
         llm = None
-        
+
         if model_type == "hf":
-            logger.info(f"Loading HF model/tokenizer from: {model_path}")
-            from transformers import AutoTokenizer, AutoModelForCausalLM
-            import torch
-            import json
-            
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
-            device = "cuda" if torch.cuda.is_available() and self.use_gpu else "cpu"
-            
-            # Check if this is a PEFT adapter by looking for adapter_config.json
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            from transformers import BitsAndBytesConfig
+
+            tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=False)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            # Detect if this is a PEFT adapter directory
             is_peft = os.path.exists(os.path.join(model_path, "adapter_config.json"))
-            
+
             if is_peft:
-                logger.info("Detected PEFT adapter. Loading base model first...")
+                logger.info("Detected PEFT LoRA adapter. Loading base model + adapter...")
+                import json
                 from peft import PeftModel
-                with open(os.path.join(model_path, "adapter_config.json"), "r") as f:
-                    config = json.load(f)
-                base_model_id = config.get("base_model_name_or_path", "microsoft/Phi-3-mini-4k-instruct")
-                
-                base_model = AutoModelForCausalLM.from_pretrained(
-                    base_model_id,
-                    torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                    device_map="auto" if device == "cuda" else None,
-                    trust_remote_code=False
+                with open(os.path.join(model_path, "adapter_config.json")) as f:
+                    cfg = json.load(f)
+                base_id = cfg.get("base_model_name_or_path", "microsoft/Phi-3-mini-4k-instruct")
+
+                # Use 4-bit quantization to fit in Kaggle T4 memory
+                bnb = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16
                 )
-                model = PeftModel.from_pretrained(base_model, model_path)
-                if device == "cpu":
-                    model = model.to("cpu")
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    base_id,
+                    quantization_config=bnb,
+                    device_map="auto",
+                    trust_remote_code=False,
+                )
+                model = PeftModel.from_pretrained(base_model, model_path, is_trainable=False)
             else:
+                # Full merged model or base model
+                bnb = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16
+                )
                 model = AutoModelForCausalLM.from_pretrained(
                     model_path,
-                    torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                    device_map="auto" if device == "cuda" else None,
-                    trust_remote_code=False
+                    quantization_config=bnb,
+                    device_map="auto",
+                    trust_remote_code=False,
                 )
-                if device == "cpu":
-                    model = model.to("cpu")
-                
+                tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=False)
+                if tokenizer.pad_token is None:
+                    tokenizer.pad_token = tokenizer.eos_token
+
             model.eval()
+            logger.info(f"Model loaded successfully. Memory: {torch.cuda.memory_allocated()/1e9:.2f}GB")
+
         elif model_type == "gguf":
-            logger.info(f"Loading GGUF model from: {model_path}")
+            logger.info(f"Loading GGUF model from {model_path}...")
             from llama_cpp import Llama
-            kwargs = {
-                "model_path": model_path,
-                "verbose": False,
-                "n_ctx": 4096
-            }
-            if self.use_gpu:
-                kwargs["n_gpu_layers"] = -1
-            llm = Llama(**kwargs)
-        else:
-            logger.info("Running evaluation in mock mode.")
-            
+            n_gpu = -1 if (self.use_gpu and torch.cuda.is_available()) else 0
+            llm = Llama(model_path=model_path, verbose=False, n_ctx=4096, n_gpu_layers=n_gpu)
+
+        # ── Evaluation loop ──────────────────────────────────────────────────
         correct_count = 0
-        format_compliant_count = 0
-        total_steps = []
-        scores = []
-        
-        results_records = []
-        
+        format_count = 0
+        records = []
+        step_counts = []
+
         for idx, sample in enumerate(samples):
             question = sample["question"]
-            gold = sample["answer"]
-            
-            prompt = f"<|user|>\n{question}\n<|assistant|>\n"
-            
+            ground_truth = sample["answer"]
+
+            # Format prompt using SFT training format
+            if model_type == "hf" and tokenizer is not None:
+                prompt = self.format_prompt(question, tokenizer)
+            else:
+                prompt = (
+                    "Solve step by step inside <thought> tags. "
+                    "Put final answer in <answer> tags.\n\n"
+                    f"Problem: {question}\n\nSolve step by step:"
+                )
+
             # Generate response
             if model_type == "hf":
                 response = self.generate_hf_response(model, tokenizer, prompt)
             elif model_type == "gguf":
                 response = self.generate_gguf_response(llm, prompt)
             else:
-                # Mock response generator
-                is_correct = (idx % 2 == 0)
-                ans = gold if is_correct else f"wrong_{gold}"
-                response = f"Step 1: Parse the parameters.\nStep 2: Calculate the solution.\nFinal Answer: {ans}"
-                
-            # Verify and score using RewardScorer
-            reward, is_correct = self.scorer.score_with_success({"answer": gold}, response)
-            metrics = {"reward": reward, "final_correct": float(is_correct)}
-            
-            # Check format compliance (must contain Step 1: and Final Answer: or similar)
-            is_format_compliant = "step 1" in response.lower() and "answer" in response.lower()
-            if is_format_compliant:
-                format_compliant_count += 1
-                
-            correct = metrics["final_correct"]
-            if correct > 0.5:
+                response = f"<thought>\nStep 1: compute.\n</thought>\n<answer>{ground_truth}</answer>"
+
+            # Extract and compare answer
+            predicted = self.extract_model_answer(response)
+            is_correct = self.answers_match(predicted, ground_truth)
+
+            # Format compliance: must have structured reasoning
+            has_thought = "<thought>" in response.lower()
+            has_answer = "<answer>" in response.lower()
+            has_steps = bool(re.search(r'step\s*\d', response, re.IGNORECASE))
+            is_format_ok = (has_thought and has_answer) or (has_steps and "answer" in response.lower())
+
+            if is_correct:
                 correct_count += 1
-                
-            scores.append(metrics["reward"])
-            step_count = response.lower().count("step")
-            total_steps.append(step_count)
-            
-            results_records.append({
-                "question": question,
-                "gold_answer": gold,
-                "model_response": response,
-                "predicted_answer": extract_final_answer(response),
-                "correct": bool(correct > 0.5),
-                "reward": metrics["reward"],
-                "format_compliant": is_format_compliant
+            if is_format_ok:
+                format_count += 1
+
+            step_count = len(re.findall(r'step\s*\d', response, re.IGNORECASE))
+            step_counts.append(step_count)
+
+            records.append({
+                "idx": idx,
+                "question": question[:100],
+                "ground_truth": ground_truth,
+                "predicted": predicted,
+                "correct": is_correct,
+                "format_ok": is_format_ok,
+                "response_snippet": response[:300],
             })
-            
-        accuracy = correct_count / len(samples)
-        format_compliance = format_compliant_count / len(samples)
-        avg_steps = np.mean(total_steps) if total_steps else 0
-        avg_reward = np.mean(scores) if scores else 0
-        
+
+            # Progress log every 10 samples
+            if (idx + 1) % 10 == 0:
+                running_acc = correct_count / (idx + 1)
+                logger.info(f"  Progress: {idx+1}/{len(samples)} | Running accuracy: {running_acc:.1%}")
+
+        # Compute summary
+        n = len(samples)
+        accuracy = correct_count / n
+        format_compliance = format_count / n
+        avg_steps = float(np.mean(step_counts)) if step_counts else 0.0
+
         summary = {
+            "checkpoint": checkpoint_label,
             "dataset": dataset_name,
-            "accuracy": accuracy,
-            "format_compliance": format_compliance,
-            "avg_steps": float(avg_steps),
-            "avg_reward": float(avg_reward),
-            "sample_count": len(samples)
-        }
-        
-        logger.info(f"Evaluation finished for {dataset_name}. Accuracy: {accuracy:.2%}, Format Compliance: {format_compliance:.2%}")
-        
-        return {
-            "summary": summary,
-            "records": results_records
+            "accuracy": round(accuracy, 4),
+            "accuracy_pct": round(accuracy * 100, 2),
+            "format_compliance": round(format_compliance, 4),
+            "avg_steps": round(avg_steps, 2),
+            "correct_count": correct_count,
+            "sample_count": n,
         }
 
+        logger.info(
+            f"[{checkpoint_label}] {dataset_name}: "
+            f"Accuracy={accuracy:.1%}, Format={format_compliance:.1%}, Steps={avg_steps:.1f}"
+        )
+        return {"summary": summary, "records": records}
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Phase 3: CRAFT Model Evaluator")
-    parser.add_argument("--model-type", type=str, default="mock", choices=["hf", "gguf", "mock"], help="Type of model backend to load")
-    parser.add_argument("--model-path", type=str, default=None, help="Path/name of HF or GGUF model")
-    parser.add_argument("--dataset", type=str, default="gsm8k", choices=["gsm8k", "strategyqa", "all"], help="Dataset to evaluate on")
-    parser.add_argument("--samples", type=int, default=20, help="Number of samples to evaluate")
-    parser.add_argument("--gpu", action="store_true", help="Enable GPU for HF model evaluation")
-    parser.add_argument("--output-json", type=str, default="craft_output/evaluation_results.json", help="Path to save evaluation summary json")
+    parser = argparse.ArgumentParser(description="CRAFT Phase 3 Evaluator")
+    parser.add_argument("--model-type", default="hf", choices=["hf", "gguf"])
+    parser.add_argument("--model-path", required=True)
+    parser.add_argument("--dataset", default="all", choices=["gsm8k", "strategyqa", "all"])
+    parser.add_argument("--samples", type=int, default=100)
+    parser.add_argument("--label", default="model", help="Label for this checkpoint in results")
+    parser.add_argument("--gpu", action="store_true")
+    parser.add_argument("--output-json", default="craft_output/results.json")
     args = parser.parse_args()
-    
+
     os.makedirs(os.path.dirname(args.output_json) or ".", exist_ok=True)
-    
     evaluator = BenchmarkEvaluator(use_gpu=args.gpu)
-    
-    datasets_to_run = ["gsm8k", "strategyqa"] if args.dataset == "all" else [args.dataset]
-    
-    overall_results = {}
-    
-    for ds in datasets_to_run:
-        res = evaluator.evaluate_model(
-            model_type=args.model_type,
+
+    datasets = ["gsm8k", "strategyqa"] if args.dataset == "all" else [args.dataset]
+    overall = {}
+    for ds in datasets:
+        result = evaluator.evaluate_checkpoint(
             model_path=args.model_path,
             dataset_name=ds,
-            num_samples=args.samples
+            num_samples=args.samples,
+            checkpoint_label=args.label,
+            model_type=args.model_type,
         )
-        overall_results[ds] = res
-        
-    # Write summary
+        overall[ds] = result
+
     with open(args.output_json, "w") as f:
-        json.dump(overall_results, f, indent=4)
-        
-    logger.info(f"Evaluation results successfully saved to: {args.output_json}")
+        json.dump(overall, f, indent=2)
+    logger.info(f"Results saved to {args.output_json}")
+
 
 if __name__ == "__main__":
     main()
