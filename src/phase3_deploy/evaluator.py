@@ -45,7 +45,7 @@ class BenchmarkEvaluator:
                         try:
                             ds = load_dataset("wiz-a/strategyqa", split="train")
                         except Exception:
-                        raise ValueError("Could not load StrategyQA from any known source")
+                            raise ValueError("Could not load StrategyQA from any known source")
                 samples = []
                 for item in list(ds)[:num_samples]:
                     samples.append({
