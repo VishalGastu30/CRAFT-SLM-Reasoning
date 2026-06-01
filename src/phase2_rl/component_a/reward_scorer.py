@@ -298,12 +298,13 @@ class RewardScorer:
         
         # Gated Combined Reward
         if not is_correct:
-            # Wrong answer: tiny reward only for maintaining some format
-            # This gives gradient signal to keep exploring, but makes being wrong unprofitable
+            # Wrong answer: tiny reward for format, PLUS a small fraction of step_score
+            # to ensure there is reward variance between different wrong answers.
+            # Without variance, GRPO advantages become 0 and the model stops learning.
             format_signal = 0.05 if (has_thought and has_answer) else 0.0
-            R_A = 0.05 + format_signal   # Max: 0.10 for wrong answer
+            R_A = 0.05 + format_signal + (0.05 * step_score_value)  # Max: ~0.15 for wrong answer
         else:
-            # Correct answer: now reward quality of reasoning
+            # Correct answer: now reward quality of reasoning heavily
             R_A = 0.7 + 0.25 * step_score_value
             if has_thought and has_answer:
                 R_A = min(1.0, R_A + 0.05)  # Max: 1.0 for correct + quality + format
