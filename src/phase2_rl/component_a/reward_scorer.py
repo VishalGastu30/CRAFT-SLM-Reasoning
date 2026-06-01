@@ -292,6 +292,10 @@ class RewardScorer:
         steps = extract_steps(response_text)
         step_score_value = self._verifier.score_steps(steps)
         
+        # Format detection
+        has_thought = '<thought>' in response_text.lower()
+        has_answer = '<answer>' in response_text.lower()
+        
         # Gated Combined Reward
         if not is_correct:
             # Wrong answer: tiny reward only for maintaining some format
