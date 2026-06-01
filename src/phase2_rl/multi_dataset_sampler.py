@@ -164,6 +164,18 @@ class MultiDatasetSampler:
         question = random.choice(available[chosen_dataset])
         return question
 
+    def _get_strategyqa(self) -> Optional[dict]:
+        """Get a random StrategyQA question."""
+        if self.datasets.get("strategyqa"):
+            return random.choice(self.datasets["strategyqa"])
+        return None
+
+    def _get_mmlu(self) -> Optional[dict]:
+        """Get a random MMLU question."""
+        if self.datasets.get("mmlu"):
+            return random.choice(self.datasets["mmlu"])
+        return None
+
     def sample_batch(self, batch_size: int = 1) -> List[dict]:
         """Sample a batch of questions."""
         return [q for q in (self.sample_one() for _ in range(batch_size)) if q]
