@@ -503,10 +503,7 @@ def train_rl(
         curriculum=curriculum,
     )
 
-    # After which step to switch to multi-dataset sampling
-    # First 200 steps: GSM8K-only (curriculum) to build math foundation
-    MULTI_DATASET_START_STEP = max(start_step, 200)
-    logger.info(f"Multi-dataset sampling starts at step {MULTI_DATASET_START_STEP}")
+    # Multi-dataset switch will be configured after checkpoint logic determines start_step
     
     # Paths
     sft_checkpoint = "checkpoints/sft/final"
@@ -629,6 +626,11 @@ def train_rl(
             kl_controller.reset()
     else:
         kl_controller.reset()
+    
+    # After which step to switch to multi-dataset sampling
+    # First 200 steps: GSM8K-only (curriculum) to build math foundation
+    MULTI_DATASET_START_STEP = max(start_step, 200)
+    logger.info(f"Multi-dataset sampling starts at step {MULTI_DATASET_START_STEP}")
     
     logger.info(
         f"GRPO RL Training active. Steps: {start_step} -> {TOTAL_STEPS} | "
