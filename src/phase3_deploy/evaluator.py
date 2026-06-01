@@ -202,7 +202,7 @@ class BenchmarkEvaluator:
         if bare_yesno:
             return bare_yesno.group(1).lower()
 
-        bare_letter = re.match(r'^\s*([A-D])[\.\!\?]?\s*$', text, re.IGNORECASE)
+        bare_letter = re.match(r'^\s*([A-D])[\.\!\?]?\s*$', text)  # Removed IGNORECASE
         if bare_letter:
             return bare_letter.group(1).upper()
 
@@ -211,7 +211,7 @@ class BenchmarkEvaluator:
         if xml:
             content = xml.group(1).strip().replace(',', '')
             # Handle option letter extraction like "B. Paris" or "B"
-            letter_from_full = re.search(r'\b([A-D])\b(?:[\.:]?\s)', content)
+            letter_from_full = re.search(r'\b([A-D])\b(?:[\.:]?\s)', content)  # Exact casing
             if letter_from_full:
                 return letter_from_full.group(1).upper()
             num = re.search(r'([\-\+]?\d+(?:\.\d+)?)', content)
@@ -220,7 +220,7 @@ class BenchmarkEvaluator:
             yn = re.search(r'\b(yes|no)\b', content, re.IGNORECASE)
             if yn:
                 return yn.group(1).lower()
-            let = re.search(r'\b([A-D])\b', content, re.IGNORECASE)
+            let = re.search(r'^([A-D])\.?$', content.strip())  # Strict regex for answer tag content
             if let:
                 return let.group(1).upper()
             return content
@@ -228,17 +228,21 @@ class BenchmarkEvaluator:
         # Priority 2: "Final Answer: X" or "The answer is X"
         for pat in [
             r'(?:final\s+answer|the\s+answer\s+is|answer\s*:)[:\s]*\*{0,2}([\-\+]?\d[\d,]*(?:\.\d+)?)\*{0,2}',
-            r'(?:final\s+answer|answer)\s*[:\-]?\s*(yes|no)\b',
-            r'(?:final\s+answer|answer)\s*[:\-]?\s*([A-D])\b',
+            r'(?:final\s+answer|answer)\s*[:\-]?\s*(yes|no)\b'
         ]:
             m = re.search(pat, text, re.IGNORECASE)
             if m:
                 val = m.group(1).strip().replace(',', '')
                 if val.lower() in ("yes", "no"):
                     return val.lower()
-                if val.upper() in ("A", "B", "C", "D"):
-                    return val.upper()
                 return val
+
+        # Separate case for letters to avoid ignorecase
+        m_let = re.search(r'(?:final\s+answer|answer)\s*[:\-]?\s*([A-D])\b', text, re.IGNORECASE)
+        if m_let:
+             val = m_let.group(1).strip()
+             if val in ("A", "B", "C", "D"):  # Explicit strict check
+                 return val
 
         # Priority 3: Last number or letter after any </thought> block
         no_thought = re.sub(r'<thought>[\s\S]*?</thought>', '', text, flags=re.IGNORECASE)
@@ -251,7 +255,7 @@ class BenchmarkEvaluator:
         if yn:
             return yn.group(1).lower()
 
-        let = re.findall(r'\b([A-D])\b', no_thought)
+        let = re.findall(r'\b([A-D])\b', no_thought) # Removed IGNORECASE
         if let:
             return let[-1].upper()
 
@@ -463,6 +467,10 @@ class BenchmarkEvaluator:
 
             step_count = len(re.findall(r'step\s*\d', response, re.IGNORECASE))
             step_counts.append(step_count)
+            
+            if idx < 5:
+                logger.info(f"Sample {idx} GT: {ground_truth} | Pred: {predicted} | Correct: {is_correct}")
+                logger.debug(f"Sample {idx} Raw Response: {response[:300]}")
 
             records.append({
                 "idx": idx,

@@ -119,6 +119,15 @@ class CurriculumEngine:
             f"[{self.min_difficulty}, {self.max_difficulty}]"
         )
 
+    def collapse_temporarily(self):
+        """Steps back the bounds if the model collapses."""
+        self.max_difficulty = max(0.4, round(self.max_difficulty - 0.1, 2))
+        self.min_difficulty = max(0.1, round(self.min_difficulty - 0.1, 2))
+        logger.warning(
+            f"Curriculum bounds collapsed (safety fallback) to: "
+            f"[{self.min_difficulty}, {self.max_difficulty}]"
+        )
+
     def update_accuracy(self, *args, **kwargs):
         """
         Registers correctness and updates tracker.

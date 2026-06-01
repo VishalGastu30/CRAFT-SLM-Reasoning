@@ -292,13 +292,16 @@ class RewardScorer:
         steps = extract_steps(response_text)
         step_score_value = self._verifier.score_steps(steps)
         
-        # Combined reward
-        R_A = 0.4 * float(is_correct) + 0.6 * step_score_value
-        
-        # Format bonus
-        has_thought = '<thought>' in response_text.lower()
-        has_answer = '<answer>' in response_text.lower()
-        if has_thought and has_answer:
-            R_A = min(1.0, R_A + 0.05)
+        # Gated Combined Reward
+        if not is_correct:
+            # Wrong answer: tiny reward only for maintaining some format
+            # This gives gradient signal to keep exploring, but makes being wrong unprofitable
+            format_signal = 0.05 if (has_thought and has_answer) else 0.0
+            R_A = 0.05 + format_signal   # Max: 0.10 for wrong answer
+        else:
+            # Correct answer: now reward quality of reasoning
+            R_A = 0.7 + 0.25 * step_score_value
+            if has_thought and has_answer:
+                R_A = min(1.0, R_A + 0.05)  # Max: 1.0 for correct + quality + format
         
         return R_A, is_correct

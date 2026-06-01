@@ -38,6 +38,14 @@ from src.phase2_rl.component_c.curriculum_engine import CurriculumEngine
 from src.phase2_rl.component_c.kl_controller import KLController
 from src.phase2_rl.multi_dataset_sampler import MultiDatasetSampler
 
+def _sample_from_curriculum(curriculum, step):
+    question_batch = curriculum.get_next_batch(batch_size=1)
+    if not question_batch:
+        logger.warning(f"Step {step}: No eligible questions in curriculum range. Expanding range temporarily.")
+        curriculum.expand_range_temporarily()
+        question_batch = curriculum.get_next_batch(batch_size=1)
+    return question_batch[0] if question_batch else None
+
 
 def load_model_and_tokenizer(
     base_model_path: str,
@@ -637,30 +645,32 @@ def train_rl(
     for step in range(start_step, TOTAL_STEPS + 1):
         
         # ── QUESTION SAMPLING ────────────────────────────────────────────────
-        # Before step 200: use curriculum (GSM8K-focused, difficulty-filtered)
-        # After step 200: use multi-dataset sampler (all 3 benchmarks)
-        if step < MULTI_DATASET_START_STEP:
-            question_batch = curriculum.get_next_batch(batch_size=1)
-            if not question_batch:
-                logger.warning(f"Step {step}: No eligible questions in curriculum range. "
-                              f"Expanding range temporarily.")
-                curriculum.expand_range_temporarily()
-                question_batch = curriculum.get_next_batch(batch_size=1)
-            if question_batch:
-                question_data = question_batch[0]
+        # Implement a gradual dataset transition to prevent sudden reward landscape shifts
+        if step < 200:
+            # 100% GSM8K curriculum (build math foundation)
+            question_data = _sample_from_curriculum(curriculum, step)
+        elif step < 250:
+            # 80% GSM8K, 20% StrategyQA
+            if step % 5 == 0:
+                question_data = multi_sampler._get_strategyqa() or _sample_from_curriculum(curriculum, step)
             else:
-                logger.warning(f"Step {step}: No questions available. Skipping.")
-                continue
+                question_data = _sample_from_curriculum(curriculum, step)
+        elif step < 350:
+            # 60% GSM8K, 30% StrategyQA, 10% MMLU
+            mod = step % 10
+            if mod < 6:
+                question_data = _sample_from_curriculum(curriculum, step)
+            elif mod < 9:
+                question_data = multi_sampler._get_strategyqa() or _sample_from_curriculum(curriculum, step)
+            else:
+                question_data = multi_sampler._get_mmlu() or _sample_from_curriculum(curriculum, step)
         else:
-            question_data = multi_sampler.sample_one()
-            if question_data is None:
-                # Fallback to curriculum if sampler fails
-                question_batch = curriculum.get_next_batch(batch_size=1)
-                if question_batch:
-                    question_data = question_batch[0]
-                else:
-                    logger.warning(f"Step {step}: No questions available. Skipping.")
-                    continue
+            # Full blend: 50% GSM8K, 30% StrategyQA, 20% MMLU
+            question_data = multi_sampler.sample_one() or _sample_from_curriculum(curriculum, step)
+
+        if question_data is None:
+            logger.warning(f"Step {step}: No questions available. Skipping.")
+            continue
         
         # Format prompt
         prompt_text = format_prompt(question_data, tokenizer)
@@ -775,6 +785,10 @@ def train_rl(
             question_id=question_data.get("id", ""),
             is_correct=(mean_success > 0)
         )
+        
+        # Safety check: if success rate is very low, step back the difficulty bounds
+        if mean_success < 0.1 and step > 50:
+             curriculum.collapse_temporarily()
         
         # ── KL CONTROLLER: Adjust beta based on measured KL ─────────────────
         current_beta = kl_controller.step(kl_loss_val)
