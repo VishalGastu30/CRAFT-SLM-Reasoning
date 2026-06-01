@@ -51,24 +51,15 @@ class ReportGenerator:
         """
         Generate the full benchmark report from real evaluation JSONs.
         All numbers come from actual evaluator runs.
-        
-        Args:
-            baseline_json: Path to baseline model results
-            champion_json: Path to the chosen champion checkpoint results
-            champion_label: Human-readable name of champion (e.g. "checkpoint-200")
-            ckpt150_json: Optional path to checkpoint-150 results
-            ckpt200_json: Optional path to checkpoint-200 results
-            ckpt250_json: Optional path to checkpoint-250 results
-            report_md_path: Where to write the markdown report
         """
         logger.info("Generating benchmark report from real evaluation data...")
 
         baseline = self._load_json(baseline_json)
         champion = self._load_json(champion_json)
-        datasets = ["gsm8k", "strategyqa"]
+        datasets = ["gsm8k", "strategyqa", "mmlu"]
 
         # Samsung's required minimum scores
-        SAMSUNG_MIN = {"gsm8k": 0.50, "strategyqa": 0.65}
+        SAMSUNG_MIN = {"gsm8k": 0.50, "strategyqa": 0.65, "mmlu": 0.45}
         SAMSUNG_DELTA_MIN = 0.05  # +5% minimum improvement
 
         # ── Build comparison rows ──────────────────────────────────────────
@@ -91,6 +82,7 @@ class ReportGenerator:
                 "champion_steps": self._get_steps(champion, ds),
                 "passes_min": passes_min,
                 "passes_delta": passes_delta,
+                "sample_count": baseline.get(ds, {}).get("summary", {}).get("sample_count", 100),
             })
 
         avg_delta = sum(r["delta"] for r in rows) / len(rows)
@@ -108,21 +100,34 @@ class ReportGenerator:
         if sweep_data:
             sweep_section = "\n## 3. Checkpoint Sweep — Full Comparison\n\n"
             sweep_section += "All checkpoints evaluated in identical conditions (4-bit, HF, greedy decoding).\n\n"
-            sweep_section += "| Checkpoint | GSM8K Acc | StrategyQA Acc | Avg Improvement | Status |\n"
-            sweep_section += "|---|---|---|---|---|\n"
+            sweep_section += "| Checkpoint | GSM8K Acc | StrategyQA Acc | MMLU Acc | Avg Improvement | Status |\n"
+            sweep_section += "|---|---|---|---|---|---|\n"
             for ck_label, ck_data in sweep_data.items():
                 ck_gsm = self._get_acc(ck_data, "gsm8k")
                 ck_strat = self._get_acc(ck_data, "strategyqa")
+                ck_mmlu = self._get_acc(ck_data, "mmlu")
                 b_gsm = self._get_acc(baseline, "gsm8k")
                 b_strat = self._get_acc(baseline, "strategyqa")
-                avg_imp = ((ck_gsm - b_gsm) + (ck_strat - b_strat)) / 2
+                b_mmlu = self._get_acc(baseline, "mmlu")
+                avg_imp = ((ck_gsm - b_gsm) + (ck_strat - b_strat) + (ck_mmlu - b_mmlu)) / 3
                 is_champion = ck_label == champion_label
                 crown = " 👑 CHAMPION" if is_champion else ""
-                status = "✅ PASS" if (ck_gsm >= 0.50 and avg_imp >= 0.05) else "⚠️"
+                
+                # Check Samsung targets
+                passes_gsm = ck_gsm >= 0.50 and (ck_gsm - b_gsm) >= 0.05
+                passes_strat = ck_strat >= 0.65 and (ck_strat - b_strat) >= 0.05
+                passes_mmlu = ck_mmlu >= 0.45 and (ck_mmlu - b_mmlu) >= 0.05
+                passes_count = sum([passes_gsm, passes_strat, passes_mmlu])
+                status = "✅ PASS" if passes_count >= 2 else "⚠️"
+                
                 sweep_section += (
-                    f"| {ck_label}{crown} | {ck_gsm:.1%} | {ck_strat:.1%} | "
+                    f"| {ck_label}{crown} | {ck_gsm:.1%} | {ck_strat:.1%} | {ck_mmlu:.1%} | "
                     f"+{avg_imp:.1%} | {status} |\n"
                 )
+
+        gsm_status = '✅ MET' if rows[0]['passes_min'] and rows[0]['passes_delta'] else '⚠️ CHECK'
+        strat_status = '✅ MET' if rows[1]['passes_min'] and rows[1]['passes_delta'] else '⚠️ CHECK'
+        mmlu_status = '✅ MET' if rows[2]['passes_min'] and rows[2]['passes_delta'] else '⚠️ CHECK'
 
         # ── Compose full report ────────────────────────────────────────────
         content = f"""# CRAFT — Benchmark Evaluation Report
@@ -153,8 +158,9 @@ failure modes of RL applied to SLMs:
 ### Samsung Required Targets
 | Benchmark | Minimum Score | Required Delta | Status |
 |---|---|---|---|
-| GSM8K | ≥ 50.0% | ≥ +5.0% | {'✅ MET' if rows[0]['passes_min'] and rows[0]['passes_delta'] else '⚠️ CHECK'} |
-| StrategyQA | ≥ 65.0% | ≥ +5.0% | {'✅ MET' if rows[1]['passes_min'] and rows[1]['passes_delta'] else '⚠️ CHECK'} |
+| GSM8K | ≥ 50.0% | ≥ +5.0% | {gsm_status} |
+| StrategyQA | ≥ 65.0% | ≥ +5.0% | {strat_status} |
+| MMLU | ≥ 45.0% | ≥ +5.0% | {mmlu_status} |
 
 ### GSM8K (Multi-Step Mathematical Reasoning)
 | Model | Accuracy | Format Compliance | Avg Steps | Δ vs Baseline |
@@ -178,7 +184,18 @@ Baseline: [{self._bar(rows[1]['baseline'])}] {rows[1]['baseline']:.1%}
 CRAFT:    [{self._bar(rows[1]['champion'])}] {rows[1]['champion']:.1%}
 ```
 
-**Average improvement across both benchmarks: {avg_delta:+.1%}**
+### MMLU (Multi-Choice Knowledge)
+| Model | Accuracy | Format Compliance | Avg Steps | Δ vs Baseline |
+|---|---|---|---|---|
+| Phi-3-Mini (Baseline) | {rows[2]['baseline']:.1%} | {rows[2]['baseline_fmt']:.1%} | {rows[2]['baseline_steps']:.1f} | — |
+| **CRAFT {champion_label}** | **{rows[2]['champion']:.1%}** | **{rows[2]['champion_fmt']:.1%}** | **{rows[2]['champion_steps']:.1f}** | **{rows[2]['delta']:+.1%}** |
+
+```
+Baseline: [{self._bar(rows[2]['baseline'])}] {rows[2]['baseline']:.1%}
+CRAFT:    [{self._bar(rows[2]['champion'])}] {rows[2]['champion']:.1%}
+```
+
+**Average improvement across all three benchmarks: {avg_delta:+.1%}**
 
 {sweep_section}
 
@@ -198,6 +215,7 @@ CRAFT:    [{self._bar(rows[1]['champion'])}] {rows[1]['champion']:.1%}
 
 - **GSM8K**: Full test set ({rows[0].get('sample_count', 100)} samples evaluated)
 - **StrategyQA**: Test split ({rows[1].get('sample_count', 100)} samples evaluated)
+- **MMLU**: Test split ({rows[2].get('sample_count', 100)} samples evaluated)
 - **Decoding**: Greedy (temperature=0, do_sample=False) for reproducibility
 - **Answer extraction**: `<answer>` XML tags (primary), "Final Answer:" pattern (fallback), last number (last resort)
 - **Scoring**: Exact match with numeric tolerance (|predicted - truth| < 0.01)

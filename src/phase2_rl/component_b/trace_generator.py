@@ -6,9 +6,10 @@ class TraceGenerator:
     Generates multiple reasoning traces (paths) for a single question
     under temperature-based sampling, enabling diversity for contrastive analysis.
     """
-    def __init__(self, model, tokenizer, n_traces=6, temperature=0.8):
+    def __init__(self, model, tokenizer, device="cuda", n_traces=4, temperature=0.8):
         self.model = model
         self.tokenizer = tokenizer
+        self.device = device
         self.n_traces = n_traces
         self.temperature = temperature
 

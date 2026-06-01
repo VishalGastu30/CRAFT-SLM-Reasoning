@@ -1,6 +1,6 @@
 """
 evaluator.py — Phase 3 CRAFT Benchmark Evaluator
-Evaluates base model and CRAFT checkpoints on GSM8K + StrategyQA.
+Evaluates base model and CRAFT checkpoints on GSM8K, StrategyQA, and MMLU.
 Uses consistent HF-format evaluation for fair comparison across all checkpoints.
 """
 
@@ -15,7 +15,7 @@ from loguru import logger
 
 class BenchmarkEvaluator:
     """
-    Evaluates models on GSM8K and StrategyQA.
+    Evaluates models on GSM8K, StrategyQA, and MMLU.
     Supports HF transformers models (for checkpoint sweep) and
     GGUF llama-cpp models (for final deployment verification only).
     """
@@ -70,6 +70,30 @@ class BenchmarkEvaluator:
                         continue
                 raise RuntimeError("Could not load StrategyQA from any known source")
 
+            elif dataset_name == "mmlu":
+                ds = load_dataset("cais/mmlu", "all", split="test")
+                total = len(ds)
+                # Sample evenly for deterministic representation
+                indices = list(range(0, total, max(1, total // num_samples)))[:num_samples]
+                samples = []
+                for idx in indices:
+                    item = ds[idx]
+                    choices = item["choices"]
+                    choices_text = "\n".join([
+                        f"A. {choices[0]}",
+                        f"B. {choices[1]}",
+                        f"C. {choices[2]}",
+                        f"D. {choices[3]}",
+                    ])
+                    full_question = f"{item['question']}\n\n{choices_text}"
+                    answer_letter = ["A", "B", "C", "D"][item["answer"]]
+                    samples.append({
+                        "question": full_question,
+                        "answer": answer_letter,
+                        "dataset": "mmlu"
+                    })
+                return samples
+
         except Exception as e:
             logger.warning(f"Dataset loading failed: {e}. Using fallback samples.")
             return self._fallback_samples(dataset_name, num_samples)
@@ -85,12 +109,35 @@ class BenchmarkEvaluator:
                 {"question": "There are 5 boxes with 8 apples each. How many apples total?", "answer": "40", "dataset": "gsm8k"},
                 {"question": "If 3 workers finish a job in 12 days, how long for 4 workers?", "answer": "9", "dataset": "gsm8k"},
             ]
-        else:
+        elif dataset_name == "strategyqa":
             base = [
                 {"question": "Would a penguin survive in the Sahara desert?", "answer": "no", "dataset": "strategyqa"},
                 {"question": "Is Beijing the capital of China?", "answer": "yes", "dataset": "strategyqa"},
                 {"question": "Can humans breathe underwater without equipment?", "answer": "no", "dataset": "strategyqa"},
                 {"question": "Did Shakespeare write Hamlet?", "answer": "yes", "dataset": "strategyqa"},
+            ]
+        else:  # mmlu
+            base = [
+                {
+                    "question": "What is the capital of France?\n\nA. London\nB. Paris\nC. Rome\nD. Berlin",
+                    "answer": "B",
+                    "dataset": "mmlu"
+                },
+                {
+                    "question": "Which planet is known as the Red Planet?\n\nA. Earth\nB. Mars\nC. Jupiter\nD. Saturn",
+                    "answer": "B",
+                    "dataset": "mmlu"
+                },
+                {
+                    "question": "What is the square root of 64?\n\nA. 6\nB. 7\nC. 8\nD. 9",
+                    "answer": "C",
+                    "dataset": "mmlu"
+                },
+                {
+                    "question": "Who wrote 'Romeo and Juliet'?\n\nA. William Shakespeare\nB. Charles Dickens\nC. Jane Austen\nD. Mark Twain",
+                    "answer": "A",
+                    "dataset": "mmlu"
+                }
             ]
         # Repeat to reach num_samples
         result = (base * ((num_samples // len(base)) + 1))[:num_samples]
@@ -98,22 +145,36 @@ class BenchmarkEvaluator:
 
     # ─── PROMPT FORMATTING ────────────────────────────────────────────────────
 
-    def format_prompt(self, question: str, tokenizer) -> str:
+    def format_prompt(self, question: str, dataset: str, tokenizer) -> str:
         """
-        Format prompt to EXACTLY match Phase 1 SFT training format.
-        The SFT model was trained to produce <thought>...</thought><answer>X</answer>.
-        If you change this prompt, the model outputs in a different format and
-        your answer extraction breaks completely.
+        Format prompt to EXACTLY match SFT and RL training formats.
         """
-        system_prompt = (
-            "You are a careful mathematical and logical reasoner. "
-            "Solve the problem step by step inside <thought> tags. "
-            "Write each step on a new line starting with 'Step N: '. "
-            "Put ONLY the final answer (a number or yes/no) inside <answer> tags.\n\n"
-            "Example:\n"
-            "<thought>\nStep 1: [reasoning]\nStep 2: [reasoning]\n</thought>\n"
-            "<answer>42</answer>"
-        )
+        if dataset == "strategyqa":
+            system_prompt = (
+                "You are a careful logical reasoner. "
+                "Answer the yes/no question by reasoning step by step inside <thought> tags. "
+                "Put ONLY 'yes' or 'no' (lowercase, nothing else) inside <answer> tags.\n\n"
+                "Example:\n"
+                "<thought>\nStep 1: [reasoning]\nStep 2: [reasoning]\n</thought>\n<answer>yes</answer>"
+            )
+        elif dataset == "mmlu":
+            system_prompt = (
+                "You are a careful reasoner answering multiple-choice questions. "
+                "Think step by step inside <thought> tags. "
+                "Put ONLY the letter (A, B, C, or D) inside <answer> tags.\n\n"
+                "Example:\n"
+                "<thought>\nStep 1: [reasoning about each option]\n</thought>\n<answer>B</answer>"
+            )
+        else:
+            system_prompt = (
+                "You are a careful mathematical and logical reasoner. "
+                "Solve the problem step by step inside <thought> tags. "
+                "Write each step on a new line starting with 'Step N: '. "
+                "Put ONLY the final answer (a number or yes/no) inside <answer> tags.\n\n"
+                "Example:\n"
+                "<thought>\nStep 1: [reasoning]\nStep 2: [reasoning]\n</thought>\n"
+                "<answer>42</answer>"
+            )
         try:
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -123,7 +184,6 @@ class BenchmarkEvaluator:
                 messages, tokenize=False, add_generation_prompt=True
             )
         except Exception:
-            # Fallback if tokenizer has no chat template
             return f"{system_prompt}\n\nProblem: {question}\n\nSolve step by step:"
 
     # ─── ANSWER EXTRACTION ────────────────────────────────────────────────────
@@ -137,37 +197,63 @@ class BenchmarkEvaluator:
             return ""
         text = response_text.strip()
 
+        # Priority 0: Bare yes/no or A/B/C/D as the ENTIRE response (common in StrategyQA / MMLU)
+        bare_yesno = re.match(r'^\s*(yes|no)[\.\!\?]?\s*$', text, re.IGNORECASE)
+        if bare_yesno:
+            return bare_yesno.group(1).lower()
+
+        bare_letter = re.match(r'^\s*([A-D])[\.\!\?]?\s*$', text, re.IGNORECASE)
+        if bare_letter:
+            return bare_letter.group(1).upper()
+
         # Priority 1: <answer>X</answer>
         xml = re.search(r'<answer>\s*([\s\S]*?)\s*</answer>', text, re.IGNORECASE)
         if xml:
             content = xml.group(1).strip().replace(',', '')
+            # Handle option letter extraction like "B. Paris" or "B"
+            letter_from_full = re.search(r'\b([A-D])\b(?:[\.:]?\s)', content)
+            if letter_from_full:
+                return letter_from_full.group(1).upper()
             num = re.search(r'([\-\+]?\d+(?:\.\d+)?)', content)
             if num:
                 return num.group(1)
             yn = re.search(r'\b(yes|no)\b', content, re.IGNORECASE)
             if yn:
                 return yn.group(1).lower()
+            let = re.search(r'\b([A-D])\b', content, re.IGNORECASE)
+            if let:
+                return let.group(1).upper()
             return content
 
         # Priority 2: "Final Answer: X" or "The answer is X"
         for pat in [
             r'(?:final\s+answer|the\s+answer\s+is|answer\s*:)[:\s]*\*{0,2}([\-\+]?\d[\d,]*(?:\.\d+)?)\*{0,2}',
             r'(?:final\s+answer|answer)\s*[:\-]?\s*(yes|no)\b',
+            r'(?:final\s+answer|answer)\s*[:\-]?\s*([A-D])\b',
         ]:
             m = re.search(pat, text, re.IGNORECASE)
             if m:
-                return m.group(1).strip().replace(',', '')
+                val = m.group(1).strip().replace(',', '')
+                if val.lower() in ("yes", "no"):
+                    return val.lower()
+                if val.upper() in ("A", "B", "C", "D"):
+                    return val.upper()
+                return val
 
-        # Priority 3: Last number after any </thought> block
+        # Priority 3: Last number or letter after any </thought> block
         no_thought = re.sub(r'<thought>[\s\S]*?</thought>', '', text, flags=re.IGNORECASE)
+        
         nums = re.findall(r'([\-\+]?\d[\d,]*(?:\.\d+)?)', no_thought)
         if nums:
             return nums[-1].replace(',', '')
 
-        # Priority 4: yes/no anywhere
-        yn = re.search(r'\b(yes|no)\b', text, re.IGNORECASE)
+        yn = re.search(r'\b(yes|no)\b', no_thought, re.IGNORECASE)
         if yn:
             return yn.group(1).lower()
+
+        let = re.findall(r'\b([A-D])\b', no_thought)
+        if let:
+            return let[-1].upper()
 
         return ""
 
@@ -215,7 +301,13 @@ class BenchmarkEvaluator:
         return response
 
     def generate_gguf_response(self, llm, prompt: str) -> str:
-        result = llm(prompt, max_tokens=256, temperature=0.0)
+        result = llm(
+            prompt,
+            max_tokens=256,
+            temperature=0.0,
+            repeat_penalty=1.1,
+            stop=["<|end|>", "<|user|>", "<|assistant|>", "</answer>"]
+        )
         return result["choices"][0]["text"].strip()
 
     # ─── MAIN EVALUATION ─────────────────────────────────────────────────────
@@ -231,9 +323,6 @@ class BenchmarkEvaluator:
         """
         Evaluate a single model checkpoint on one dataset.
         Returns a dict with accuracy, format_compliance, avg_steps, records.
-        
-        model_type: 'hf' for HuggingFace transformers, 'gguf' for llama.cpp GGUF.
-        Always use 'hf' for the checkpoint sweep. Only use 'gguf' for final verification.
         """
         samples = self.load_test_dataset(dataset_name, num_samples)[:num_samples]
         logger.info(f"Evaluating [{checkpoint_label}] on {dataset_name} ({len(samples)} samples)...")
@@ -299,6 +388,34 @@ class BenchmarkEvaluator:
             n_gpu = -1 if (self.use_gpu and torch.cuda.is_available()) else 0
             llm = Llama(model_path=model_path, verbose=False, n_ctx=4096, n_gpu_layers=n_gpu)
 
+        # Build appropriate system prompt for the prompt / GGUF format
+        if dataset_name == "strategyqa":
+            system_prompt = (
+                "You are a careful logical reasoner. "
+                "Answer the yes/no question by reasoning step by step inside <thought> tags. "
+                "Put ONLY 'yes' or 'no' (lowercase, nothing else) inside <answer> tags.\n\n"
+                "Example:\n"
+                "<thought>\nStep 1: [reasoning]\nStep 2: [reasoning]\n</thought>\n<answer>yes</answer>"
+            )
+        elif dataset_name == "mmlu":
+            system_prompt = (
+                "You are a careful reasoner answering multiple-choice questions. "
+                "Think step by step inside <thought> tags. "
+                "Put ONLY the letter (A, B, C, or D) inside <answer> tags.\n\n"
+                "Example:\n"
+                "<thought>\nStep 1: [reasoning about each option]\n</thought>\n<answer>B</answer>"
+            )
+        else:
+            system_prompt = (
+                "You are a careful mathematical and logical reasoner. "
+                "Solve the problem step by step inside <thought> tags. "
+                "Write each step on a new line starting with 'Step N: '. "
+                "Put ONLY the final answer (a number or yes/no) inside <answer> tags.\n\n"
+                "Example:\n"
+                "<thought>\nStep 1: [reasoning]\nStep 2: [reasoning]\n</thought>\n"
+                "<answer>42</answer>"
+            )
+
         # ── Evaluation loop ──────────────────────────────────────────────────
         correct_count = 0
         format_count = 0
@@ -309,15 +426,17 @@ class BenchmarkEvaluator:
             question = sample["question"]
             ground_truth = sample["answer"]
 
-            # Format prompt using SFT training format
-            if model_type == "hf" and tokenizer is not None:
-                prompt = self.format_prompt(question, tokenizer)
-            else:
+            # Generate prompt
+            if model_type == "gguf":
                 prompt = (
-                    "Solve step by step inside <thought> tags. "
-                    "Put final answer in <answer> tags.\n\n"
-                    f"Problem: {question}\n\nSolve step by step:"
+                    f"<|system|>\n{system_prompt}<|end|>\n"
+                    f"<|user|>\nProblem: {question}\n\nSolve step by step:<|end|>\n"
+                    f"<|assistant|>\n"
                 )
+            elif model_type == "hf" and tokenizer is not None:
+                prompt = self.format_prompt(question, dataset_name, tokenizer)
+            else:
+                prompt = f"{system_prompt}\n\nProblem: {question}\n\nSolve step by step:"
 
             # Generate response
             if model_type == "hf":
@@ -388,7 +507,7 @@ def main():
     parser = argparse.ArgumentParser(description="CRAFT Phase 3 Evaluator")
     parser.add_argument("--model-type", default="hf", choices=["hf", "gguf"])
     parser.add_argument("--model-path", required=True)
-    parser.add_argument("--dataset", default="all", choices=["gsm8k", "strategyqa", "all"])
+    parser.add_argument("--dataset", default="all", choices=["gsm8k", "strategyqa", "mmlu", "all"])
     parser.add_argument("--samples", type=int, default=100)
     parser.add_argument("--label", default="model", help="Label for this checkpoint in results")
     parser.add_argument("--gpu", action="store_true")
@@ -398,7 +517,7 @@ def main():
     os.makedirs(os.path.dirname(args.output_json) or ".", exist_ok=True)
     evaluator = BenchmarkEvaluator(use_gpu=args.gpu)
 
-    datasets = ["gsm8k", "strategyqa"] if args.dataset == "all" else [args.dataset]
+    datasets = ["gsm8k", "strategyqa", "mmlu"] if args.dataset == "all" else [args.dataset]
     overall = {}
     for ds in datasets:
         result = evaluator.evaluate_checkpoint(

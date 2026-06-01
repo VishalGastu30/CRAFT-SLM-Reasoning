@@ -9,7 +9,7 @@ class RewardCombiner:
     Formula: R_total = R_A - format_penalty
     """
     def __init__(self, nli_model_name="cross-encoder/nli-deberta-v3-small", device=None):
-        self.scorer = RewardScorer(nli_model_name=nli_model_name, device=device)
+        self.scorer = RewardScorer()
 
     def calculate_format_penalty(self, response_text: str) -> float:
         """

@@ -36,6 +36,7 @@ from src.phase2_rl.component_b.contrastive_builder import ContrastiveBuilder
 from src.phase2_rl.component_b.dpo_trainer import StepDPOTrainer
 from src.phase2_rl.component_c.curriculum_engine import CurriculumEngine
 from src.phase2_rl.component_c.kl_controller import KLController
+from src.phase2_rl.multi_dataset_sampler import MultiDatasetSampler
 
 
 def load_model_and_tokenizer(
@@ -330,50 +331,59 @@ def generate_group_responses(
 
 def format_prompt(question_data: dict, tokenizer) -> str:
     """
-    Format a question into the exact prompt format the SFT model was trained on.
+    Format a question into the correct prompt for its dataset type.
     
-    CRITICAL: This format MUST match what was used in Phase 1 SFT training.
-    If they don't match, the model will produce garbled outputs.
-    
-    The SFT model was trained to produce:
-    <thought>
-    Step 1: ...
-    Step 2: ...
-    </thought>
-    <answer>FINAL_ANSWER</answer>
-    
-    So the prompt must ask for this format.
+    CRITICAL: The system prompt format MUST match Phase 1 SFT training format.
+    Three dataset-specific variants:
+    - GSM8K/AQuA-RAT: math reasoning → number answer
+    - StrategyQA: logical reasoning → yes/no answer
+    - MMLU: multi-choice reasoning → A/B/C/D answer
     """
     question_text = question_data.get("question", question_data.get("problem", ""))
-    
-    system_prompt = (
-        "You are a careful mathematical and logical reasoner. "
-        "Solve the problem step by step inside <thought> tags. "
-        "Write each step on a new line starting with 'Step N: '. "
-        "Put ONLY the final answer (a number or yes/no) inside <answer> tags.\n\n"
-        "Example format:\n"
-        "<thought>\n"
-        "Step 1: [your reasoning]\n"
-        "Step 2: [your reasoning]\n"
-        "</thought>\n"
-        "<answer>42</answer>"
-    )
-    
-    # Use the tokenizer's chat template if available, else simple format
+    dataset = question_data.get("dataset", "gsm8k")
+
+    if dataset == "strategyqa":
+        system_prompt = (
+            "You are a careful logical reasoner. "
+            "Think step by step inside <thought> tags, analyzing whether the "
+            "statement is true or false. "
+            "Put ONLY 'yes' or 'no' (lowercase) inside <answer> tags.\n\n"
+            "Example format:\n"
+            "<thought>\nStep 1: [fact check]\nStep 2: [conclusion]\n</thought>\n"
+            "<answer>yes</answer>"
+        )
+    elif dataset == "mmlu":
+        system_prompt = (
+            "You are a careful reasoner answering multiple-choice questions. "
+            "Think step by step inside <thought> tags, evaluating each option. "
+            "Put ONLY the letter (A, B, C, or D) inside <answer> tags.\n\n"
+            "Example format:\n"
+            "<thought>\nStep 1: [analyze options]\nStep 2: [select best]\n</thought>\n"
+            "<answer>B</answer>"
+        )
+    else:
+        # GSM8K / AQuA-RAT / default math
+        system_prompt = (
+            "You are a careful mathematical and logical reasoner. "
+            "Solve the problem step by step inside <thought> tags. "
+            "Write each step on a new line starting with 'Step N: '. "
+            "Put ONLY the final answer (a number or letter) inside <answer> tags.\n\n"
+            "Example format:\n"
+            "<thought>\nStep 1: [your reasoning]\nStep 2: [your reasoning]\n</thought>\n"
+            "<answer>42</answer>"
+        )
+
     try:
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Problem: {question_text}\n\nSolve step by step:"}
         ]
         prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True
         )
     except Exception:
-        # Fallback: simple format
         prompt = f"{system_prompt}\n\nProblem: {question_text}\n\nSolve step by step:"
-    
+
     return prompt
 
 
@@ -473,6 +483,22 @@ def train_rl(
         target_kl=config.get("kl_target", 0.1),
     )
     reward_scorer = RewardScorer()
+
+    # Initialize multi-dataset sampler (GSM8K + StrategyQA + MMLU)
+    # This replaces curriculum-only sampling for steps after 200
+    multi_sampler = MultiDatasetSampler(
+        gsm8k_weight=0.50,
+        strategyqa_weight=0.30,
+        mmlu_weight=0.20,
+        n_preload=500,
+        difficulty_mapper=difficulty_mapper,
+        curriculum=curriculum,
+    )
+
+    # After which step to switch to multi-dataset sampling
+    # First 200 steps: GSM8K-only (curriculum) to build math foundation
+    MULTI_DATASET_START_STEP = max(start_step, 200)
+    logger.info(f"Multi-dataset sampling starts at step {MULTI_DATASET_START_STEP}")
     
     # Paths
     sft_checkpoint = "checkpoints/sft/final"
@@ -610,15 +636,31 @@ def train_rl(
     # ─── MAIN TRAINING LOOP ──────────────────────────────────────────────────
     for step in range(start_step, TOTAL_STEPS + 1):
         
-        # ── COMPONENT C: Select question from learning zone ──────────────────
-        question_batch = curriculum.get_next_batch(batch_size=1)
-        if not question_batch:
-            logger.warning(f"Step {step}: No eligible questions in curriculum range. "
-                          f"Expanding range temporarily.")
-            curriculum.expand_range_temporarily()
+        # ── QUESTION SAMPLING ────────────────────────────────────────────────
+        # Before step 200: use curriculum (GSM8K-focused, difficulty-filtered)
+        # After step 200: use multi-dataset sampler (all 3 benchmarks)
+        if step < MULTI_DATASET_START_STEP:
             question_batch = curriculum.get_next_batch(batch_size=1)
-        
-        question_data = question_batch[0]
+            if not question_batch:
+                logger.warning(f"Step {step}: No eligible questions in curriculum range. "
+                              f"Expanding range temporarily.")
+                curriculum.expand_range_temporarily()
+                question_batch = curriculum.get_next_batch(batch_size=1)
+            if question_batch:
+                question_data = question_batch[0]
+            else:
+                logger.warning(f"Step {step}: No questions available. Skipping.")
+                continue
+        else:
+            question_data = multi_sampler.sample_one()
+            if question_data is None:
+                # Fallback to curriculum if sampler fails
+                question_batch = curriculum.get_next_batch(batch_size=1)
+                if question_batch:
+                    question_data = question_batch[0]
+                else:
+                    logger.warning(f"Step {step}: No questions available. Skipping.")
+                    continue
         
         # Format prompt
         prompt_text = format_prompt(question_data, tokenizer)
