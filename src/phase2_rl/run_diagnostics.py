@@ -29,10 +29,11 @@ def run_diagnostics():
         from src.phase2_rl.component_a.reward_scorer import RewardScorer
         scorer = RewardScorer()
         
-        # Case 1: correct answer
+        # Case 1: correct answer (plain text format, matching SFT)
         resp_correct = (
-            "<thought>\nStep 1: 5 + 3 = 8\nStep 2: 8 - 2 = 6\n</thought>"
-            "\n<answer>6</answer>"
+            "Step 1: 5 + 3 = 8\n"
+            "Step 2: 8 - 2 = 6\n"
+            "Final Answer: 6"
         )
         q_correct = {"answer": "6"}
         r_correct, s_correct = scorer.score_with_success(q_correct, resp_correct)
@@ -44,7 +45,7 @@ def run_diagnostics():
             all_passed = False
         
         # Case 2: wrong answer
-        resp_wrong = "<thought>\nStep 1: 5 + 3 = 8\n</thought>\n<answer>99</answer>"
+        resp_wrong = "Step 1: 5 + 3 = 8\nFinal Answer: 99"
         r_wrong, s_wrong = scorer.score_with_success(q_correct, resp_wrong)
         
         if not s_wrong:
@@ -97,6 +98,7 @@ def run_diagnostics():
         print("❌ SOME TESTS FAILED. Fix issues above before training.")
         sys.exit(1)
     print("=" * 65)
+
 
 if __name__ == "__main__":
     run_diagnostics()
