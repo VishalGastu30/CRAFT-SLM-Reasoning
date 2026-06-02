@@ -2,10 +2,6 @@ import torch
 from loguru import logger
 
 class TraceGenerator:
-    """
-    Generates multiple reasoning traces (paths) for a single question
-    under temperature-based sampling, enabling diversity for contrastive analysis.
-    """
     def __init__(self, model, tokenizer, device="cuda", n_traces=4, temperature=0.8):
         self.model = model
         self.tokenizer = tokenizer
@@ -14,46 +10,19 @@ class TraceGenerator:
         self.temperature = temperature
 
     def generate_traces(self, question: str) -> list:
-        """
-        Generates diverse reasoning traces for a given question.
-        Returns:
-            list of dict: [{"trace_text": str, "tokens": list}]
-        """
-        if self.model is None or self.tokenizer is None:
-            # Fallback mock generations if no active model loaded
-            mock_traces = []
-            for i in range(self.n_traces):
-                is_correct = (i % 2 == 0)
-                ans = "36" if is_correct else "32"
-                text = f"Step 1: 15/100 * 240 = {ans}.\nFinal Answer: {ans}"
-                mock_traces.append({
-                    "trace_text": text,
-                    "is_mock": True
-                })
-            return mock_traces
-
         prompt = f"<|user|>\n{question}\n<|assistant|>\n"
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(next(self.model.parameters()).device)
-        
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
         traces = []
         for _ in range(self.n_traces):
             try:
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=256,
-                    do_sample=True,
-                    temperature=self.temperature,
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
-                response = self.tokenizer.decode(
-                    outputs[0][inputs.input_ids.shape[1]:],
-                    skip_special_tokens=True
-                )
-                traces.append({
-                    "trace_text": response,
-                    "is_mock": False
-                })
+                with torch.no_grad():
+                    out = self.model.generate(
+                        **inputs, max_new_tokens=256, do_sample=True,
+                        temperature=self.temperature, repetition_penalty=1.1,
+                        pad_token_id=self.tokenizer.eos_token_id
+                    )
+                resp = self.tokenizer.decode(out[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+                traces.append({"trace_text": resp})
             except Exception as e:
-                logger.error(f"Error generating trace: {e}")
-                
+                logger.error(f"Trace gen error: {e}")
         return traces
