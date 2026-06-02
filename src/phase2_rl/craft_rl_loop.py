@@ -155,21 +155,39 @@ def generate_group_responses(policy_model, tokenizer, prompt_text, group_size, m
 
 
 def format_prompt(question_data, tokenizer):
+    """
+    Format prompt to EXACTLY match Phase 1 SFT training.
+    The model was trained to output:
+        Step 1: ...
+        Step 2: ...
+        Final Answer: X
+    No XML tags.
+    """
     question_text = question_data.get("question", question_data.get("problem", ""))
     dataset = question_data.get("dataset", "gsm8k")
+    
+    # Use the SFT system prompt (what the model actually learned)
     if dataset == "strategyqa":
-        system = ("You are a careful logical reasoner. Think step by step inside <thought> tags. "
-                  "Put ONLY 'yes' or 'no' (lowercase) inside <answer> tags.\n"
-                  "Example:\n<thought>\nStep 1: ...\n</thought>\n<answer>yes</answer>")
+        system = (
+            "You are a reasoning assistant. Answer the yes/no question step by step. "
+            "You MUST format your explanation as a sequence of steps starting with "
+            "'Step 1:', 'Step 2:', etc. You MUST end your response with 'Final Answer: yes' or 'Final Answer: no'."
+        )
     elif dataset == "mmlu":
-        system = ("You are a careful reasoner answering multiple-choice. "
-                  "Think inside <thought> tags. Put ONLY the letter (A, B, C, D) inside <answer> tags.\n"
-                  "Example:\n<thought>Step 1: ...\n</thought>\n<answer>B</answer>")
+        system = (
+            "You are a reasoning assistant. Answer the multiple-choice question step by step. "
+            "You MUST format your explanation as a sequence of steps starting with "
+            "'Step 1:', 'Step 2:', etc. You MUST end your response with 'Final Answer: A' (or B, C, D)."
+        )
     else:
-        system = ("You are a careful mathematical reasoner. Solve step by step inside <thought> tags. "
-                  "Write each step on a new line starting with 'Step N: '. "
-                  "Put ONLY the final answer (number or yes/no) inside <answer> tags.\n"
-                  "Example:\n<thought>\nStep 1: ...\n</thought>\n<answer>42</answer>")
+        # GSM8K / math problems
+        system = (
+            "You are a reasoning assistant. Solve the math problem step by step. "
+            "You MUST format your explanation as a sequence of steps starting with "
+            "'Step 1:', 'Step 2:', etc. You MUST end your response with 'Final Answer: [value]' "
+            "where [value] is the short final answer."
+        )
+    
     try:
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": f"Problem: {question_text}\n\nSolve step by step:"}]
