@@ -1,7 +1,7 @@
 """
 evaluator.py — Phase 3 CRAFT Benchmark Evaluator
 Evaluates base model and CRAFT checkpoints on GSM8K, StrategyQA, and MMLU.
-Uses consistent HF-format evaluation for fair comparison across all checkpoints.
+Uses consistent plain‑text format matching Phase 1 SFT (no XML tags).
 """
 
 import os
@@ -33,7 +33,6 @@ class BenchmarkEvaluator:
                 ds = load_dataset("gsm8k", "main", split="test")
                 samples = []
                 for item in list(ds)[:num_samples]:
-                    # Pre-strip the #### prefix so ground truth is just the number
                     raw_answer = item["answer"]
                     if "####" in raw_answer:
                         gt = raw_answer.split("####")[-1].strip()
@@ -52,7 +51,6 @@ class BenchmarkEvaluator:
                         ds = load_dataset(source, split="test")
                         samples = []
                         for item in list(ds)[:num_samples]:
-                            # StrategyQA stores answers as Python booleans or strings
                             raw = item.get("answer", item.get("label", False))
                             if isinstance(raw, bool):
                                 gt = "yes" if raw else "no"
@@ -73,7 +71,6 @@ class BenchmarkEvaluator:
             elif dataset_name == "mmlu":
                 ds = load_dataset("cais/mmlu", "all", split="test")
                 total = len(ds)
-                # Sample evenly for deterministic representation
                 indices = list(range(0, total, max(1, total // num_samples)))[:num_samples]
                 samples = []
                 for idx in indices:
@@ -118,147 +115,111 @@ class BenchmarkEvaluator:
             ]
         else:  # mmlu
             base = [
-                {
-                    "question": "What is the capital of France?\n\nA. London\nB. Paris\nC. Rome\nD. Berlin",
-                    "answer": "B",
-                    "dataset": "mmlu"
-                },
-                {
-                    "question": "Which planet is known as the Red Planet?\n\nA. Earth\nB. Mars\nC. Jupiter\nD. Saturn",
-                    "answer": "B",
-                    "dataset": "mmlu"
-                },
-                {
-                    "question": "What is the square root of 64?\n\nA. 6\nB. 7\nC. 8\nD. 9",
-                    "answer": "C",
-                    "dataset": "mmlu"
-                },
-                {
-                    "question": "Who wrote 'Romeo and Juliet'?\n\nA. William Shakespeare\nB. Charles Dickens\nC. Jane Austen\nD. Mark Twain",
-                    "answer": "A",
-                    "dataset": "mmlu"
-                }
+                {"question": "What is the capital of France?\n\nA. London\nB. Paris\nC. Rome\nD. Berlin", "answer": "B", "dataset": "mmlu"},
+                {"question": "Which planet is known as the Red Planet?\n\nA. Earth\nB. Mars\nC. Jupiter\nD. Saturn", "answer": "B", "dataset": "mmlu"},
+                {"question": "What is the square root of 64?\n\nA. 6\nB. 7\nC. 8\nD. 9", "answer": "C", "dataset": "mmlu"},
+                {"question": "Who wrote 'Romeo and Juliet'?\n\nA. William Shakespeare\nB. Charles Dickens\nC. Jane Austen\nD. Mark Twain", "answer": "A", "dataset": "mmlu"}
             ]
-        # Repeat to reach num_samples
         result = (base * ((num_samples // len(base)) + 1))[:num_samples]
         return result
 
-    # ─── PROMPT FORMATTING ────────────────────────────────────────────────────
+    # ─── PROMPT FORMATTING (Plain Text, No XML Tags) ─────────────────────────
 
     def format_prompt(self, question: str, dataset: str, tokenizer) -> str:
         """
-        Format prompt to EXACTLY match SFT and RL training formats.
+        Format prompt to EXACTLY match Phase 1 SFT and Phase 2 RL training format.
+        Model expects: numbered steps and "Final Answer: X".
         """
         if dataset == "strategyqa":
-            system_prompt = (
-                "You are a careful logical reasoner. "
-                "Answer the yes/no question by reasoning step by step inside <thought> tags. "
-                "Put ONLY 'yes' or 'no' (lowercase, nothing else) inside <answer> tags.\n\n"
-                "Example:\n"
-                "<thought>\nStep 1: [reasoning]\nStep 2: [reasoning]\n</thought>\n<answer>yes</answer>"
+            system = (
+                "You are a reasoning assistant. Answer the yes/no question step by step. "
+                "You MUST format your explanation as a sequence of steps starting with "
+                "'Step 1:', 'Step 2:', etc. You MUST end your response with 'Final Answer: yes' or 'Final Answer: no'."
             )
         elif dataset == "mmlu":
-            system_prompt = (
-                "You are a careful reasoner answering multiple-choice questions. "
-                "Think step by step inside <thought> tags. "
-                "Put ONLY the letter (A, B, C, or D) inside <answer> tags.\n\n"
-                "Example:\n"
-                "<thought>\nStep 1: [reasoning about each option]\n</thought>\n<answer>B</answer>"
+            system = (
+                "You are a reasoning assistant. Answer the multiple-choice question step by step. "
+                "You MUST format your explanation as a sequence of steps starting with "
+                "'Step 1:', 'Step 2:', etc. You MUST end your response with 'Final Answer: A' (or B, C, D)."
             )
         else:
-            system_prompt = (
-                "You are a careful mathematical and logical reasoner. "
-                "Solve the problem step by step inside <thought> tags. "
-                "Write each step on a new line starting with 'Step N: '. "
-                "Put ONLY the final answer (a number or yes/no) inside <answer> tags.\n\n"
-                "Example:\n"
-                "<thought>\nStep 1: [reasoning]\nStep 2: [reasoning]\n</thought>\n"
-                "<answer>42</answer>"
+            system = (
+                "You are a reasoning assistant. Solve the math problem step by step. "
+                "You MUST format your explanation as a sequence of steps starting with "
+                "'Step 1:', 'Step 2:', etc. You MUST end your response with 'Final Answer: [value]' "
+                "where [value] is the short final answer."
             )
         try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Problem: {question}\n\nSolve step by step:"}
-            ]
-            return tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
+            messages = [{"role": "system", "content": system},
+                        {"role": "user", "content": f"Problem: {question}\n\nSolve step by step:"}]
+            return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         except Exception:
-            return f"{system_prompt}\n\nProblem: {question}\n\nSolve step by step:"
+            return f"{system}\n\nProblem: {question}\n\nSolve step by step:"
 
-    # ─── ANSWER EXTRACTION ────────────────────────────────────────────────────
+    # ─── ANSWER EXTRACTION (Prioritizes "Final Answer:") ─────────────────────
 
     def extract_model_answer(self, response_text: str) -> str:
         """
         Extract final answer from model output.
-        Handles <answer> XML tags, 'Final Answer:' format, and last-number fallback.
+        Prioritises 'Final Answer:' exactly as trained.
         """
         if not response_text:
             return ""
         text = response_text.strip()
 
-        # Priority 0: Bare yes/no or A/B/C/D as the ENTIRE response (common in StrategyQA / MMLU)
+        # Priority 1: "Final Answer: X"
+        final_match = re.search(r'Final Answer:\s*([^\n]+)', text, re.IGNORECASE)
+        if final_match:
+            ans = final_match.group(1).strip()
+            # Extract number (e.g., "6 apples" → "6")
+            num = re.search(r'([+\-]?\d[\d,]*(?:\.\d+)?)', ans)
+            if num:
+                return num.group(1).replace(',', '')
+            # Extract yes/no
+            yn = re.search(r'\b(yes|no)\b', ans, re.IGNORECASE)
+            if yn:
+                return yn.group(1).lower()
+            # Extract letter (A, B, C, D)
+            letter = re.search(r'\b([A-D])\b', ans)
+            if letter:
+                return letter.group(1).upper()
+            return ans
+
+        # Priority 2: Bare yes/no or letter as entire response
         bare_yesno = re.match(r'^\s*(yes|no)[\.\!\?]?\s*$', text, re.IGNORECASE)
         if bare_yesno:
             return bare_yesno.group(1).lower()
-
-        bare_letter = re.match(r'^\s*([A-D])[\.\!\?]?\s*$', text)  # Removed IGNORECASE
+        bare_letter = re.match(r'^\s*([A-D])[\.\!\?]?\s*$', text)
         if bare_letter:
             return bare_letter.group(1).upper()
 
-        # Priority 1: <answer>X</answer>
+        # Priority 3: <answer> tags (only for backward compatibility, not used)
         xml = re.search(r'<answer>\s*([\s\S]*?)\s*</answer>', text, re.IGNORECASE)
         if xml:
             content = xml.group(1).strip().replace(',', '')
-            # Handle option letter extraction like "B. Paris" or "B"
-            letter_from_full = re.search(r'\b([A-D])\b(?:[\.:]?\s)', content)  # Exact casing
-            if letter_from_full:
-                return letter_from_full.group(1).upper()
-            num = re.search(r'([\-\+]?\d+(?:\.\d+)?)', content)
+            num = re.search(r'([+\-]?\d+(?:\.\d+)?)', content)
             if num:
                 return num.group(1)
             yn = re.search(r'\b(yes|no)\b', content, re.IGNORECASE)
             if yn:
                 return yn.group(1).lower()
-            let = re.search(r'^([A-D])\.?$', content.strip())  # Strict regex for answer tag content
-            if let:
-                return let.group(1).upper()
+            letter = re.search(r'^([A-D])\.?$', content.strip())
+            if letter:
+                return letter.group(1).upper()
             return content
 
-        # Priority 2: "Final Answer: X" or "The answer is X"
-        for pat in [
-            r'(?:final\s+answer|the\s+answer\s+is|answer\s*:)[:\s]*\*{0,2}([\-\+]?\d[\d,]*(?:\.\d+)?)\*{0,2}',
-            r'(?:final\s+answer|answer)\s*[:\-]?\s*(yes|no)\b'
-        ]:
-            m = re.search(pat, text, re.IGNORECASE)
-            if m:
-                val = m.group(1).strip().replace(',', '')
-                if val.lower() in ("yes", "no"):
-                    return val.lower()
-                return val
-
-        # Separate case for letters to avoid ignorecase
-        m_let = re.search(r'(?:final\s+answer|answer)\s*[:\-]?\s*([A-D])\b', text, re.IGNORECASE)
-        if m_let:
-             val = m_let.group(1).strip()
-             if val in ("A", "B", "C", "D"):  # Explicit strict check
-                 return val
-
-        # Priority 3: Last number or letter after any </thought> block
-        no_thought = re.sub(r'<thought>[\s\S]*?</thought>', '', text, flags=re.IGNORECASE)
-        
-        nums = re.findall(r'([\-\+]?\d[\d,]*(?:\.\d+)?)', no_thought)
+        # Priority 4: last number anywhere
+        nums = re.findall(r'([+\-]?\d[\d,]*(?:\.\d+)?)', text)
         if nums:
             return nums[-1].replace(',', '')
-
-        yn = re.search(r'\b(yes|no)\b', no_thought, re.IGNORECASE)
-        if yn:
-            return yn.group(1).lower()
-
-        let = re.findall(r'\b([A-D])\b', no_thought) # Removed IGNORECASE
+        # Priority 5: yes/no anywhere
+        yn2 = re.search(r'\b(yes|no)\b', text, re.IGNORECASE)
+        if yn2:
+            return yn2.group(1).lower()
+        # Priority 6: single letter
+        let = re.search(r'\b([A-D])\b', text)
         if let:
-            return let[-1].upper()
-
+            return let.group(1).upper()
         return ""
 
     def answers_match(self, predicted: str, ground_truth: str) -> bool:
@@ -286,22 +247,18 @@ class BenchmarkEvaluator:
     def generate_hf_response(self, model, tokenizer, prompt: str) -> str:
         import torch
         device = next(model.parameters()).device
-        inputs = tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=512
-        ).to(device)
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=256,
-                do_sample=False,  # Greedy for reproducibility
+                do_sample=False,  # greedy for reproducibility
                 temperature=1.0,
+                repetition_penalty=1.1,
                 pad_token_id=tokenizer.eos_token_id,
                 eos_token_id=tokenizer.eos_token_id,
             )
-        response = tokenizer.decode(
-            outputs[0][inputs["input_ids"].shape[1]:],
-            skip_special_tokens=True
-        )
+        response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
         return response
 
     def generate_gguf_response(self, llm, prompt: str) -> str:
@@ -310,7 +267,7 @@ class BenchmarkEvaluator:
             max_tokens=256,
             temperature=0.0,
             repeat_penalty=1.1,
-            stop=["<|end|>", "<|user|>", "<|assistant|>", "</answer>"]
+            stop=["<|end|>", "<|user|>", "<|assistant|>"]
         )
         return result["choices"][0]["text"].strip()
 
@@ -344,7 +301,6 @@ class BenchmarkEvaluator:
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            # Detect if this is a PEFT adapter directory
             is_peft = os.path.exists(os.path.join(model_path, "adapter_config.json"))
 
             if is_peft:
@@ -354,30 +310,15 @@ class BenchmarkEvaluator:
                 with open(os.path.join(model_path, "adapter_config.json")) as f:
                     cfg = json.load(f)
                 base_id = cfg.get("base_model_name_or_path", "microsoft/Phi-3-mini-4k-instruct")
-
-                # Use 4-bit quantization to fit in Kaggle T4 memory
-                bnb = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.bfloat16
-                )
+                bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
                 base_model = AutoModelForCausalLM.from_pretrained(
-                    base_id,
-                    quantization_config=bnb,
-                    device_map="auto",
-                    trust_remote_code=False,
+                    base_id, quantization_config=bnb, device_map="auto", trust_remote_code=False
                 )
                 model = PeftModel.from_pretrained(base_model, model_path, is_trainable=False)
             else:
-                # Full merged model or base model
-                bnb = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.bfloat16
-                )
+                bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
                 model = AutoModelForCausalLM.from_pretrained(
-                    model_path,
-                    quantization_config=bnb,
-                    device_map="auto",
-                    trust_remote_code=False,
+                    model_path, quantization_config=bnb, device_map="auto", trust_remote_code=False
                 )
                 tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=False)
                 if tokenizer.pad_token is None:
@@ -392,35 +333,24 @@ class BenchmarkEvaluator:
             n_gpu = -1 if (self.use_gpu and torch.cuda.is_available()) else 0
             llm = Llama(model_path=model_path, verbose=False, n_ctx=4096, n_gpu_layers=n_gpu)
 
-        # Build appropriate system prompt for the prompt / GGUF format
+        # Build system prompt for GGUF case (plain text)
         if dataset_name == "strategyqa":
             system_prompt = (
-                "You are a careful logical reasoner. "
-                "Answer the yes/no question by reasoning step by step inside <thought> tags. "
-                "Put ONLY 'yes' or 'no' (lowercase, nothing else) inside <answer> tags.\n\n"
-                "Example:\n"
-                "<thought>\nStep 1: [reasoning]\nStep 2: [reasoning]\n</thought>\n<answer>yes</answer>"
+                "You are a reasoning assistant. Answer the yes/no question step by step. "
+                "Format steps as 'Step 1:', 'Step 2:', etc. End with 'Final Answer: yes' or 'Final Answer: no'."
             )
         elif dataset_name == "mmlu":
             system_prompt = (
-                "You are a careful reasoner answering multiple-choice questions. "
-                "Think step by step inside <thought> tags. "
-                "Put ONLY the letter (A, B, C, or D) inside <answer> tags.\n\n"
-                "Example:\n"
-                "<thought>\nStep 1: [reasoning about each option]\n</thought>\n<answer>B</answer>"
+                "You are a reasoning assistant. Answer the multiple-choice question step by step. "
+                "Format steps as 'Step 1:', 'Step 2:', etc. End with 'Final Answer: A' (or B, C, D)."
             )
         else:
             system_prompt = (
-                "You are a careful mathematical and logical reasoner. "
-                "Solve the problem step by step inside <thought> tags. "
-                "Write each step on a new line starting with 'Step N: '. "
-                "Put ONLY the final answer (a number or yes/no) inside <answer> tags.\n\n"
-                "Example:\n"
-                "<thought>\nStep 1: [reasoning]\nStep 2: [reasoning]\n</thought>\n"
-                "<answer>42</answer>"
+                "You are a reasoning assistant. Solve the math problem step by step. "
+                "Format steps as 'Step 1:', 'Step 2:', etc. End with 'Final Answer: [value]'."
             )
 
-        # ── Evaluation loop ──────────────────────────────────────────────────
+        # Evaluation loop
         correct_count = 0
         format_count = 0
         records = []
@@ -430,7 +360,7 @@ class BenchmarkEvaluator:
             question = sample["question"]
             ground_truth = sample["answer"]
 
-            # Generate prompt
+            # Build prompt
             if model_type == "gguf":
                 prompt = (
                     f"<|system|>\n{system_prompt}<|end|>\n"
@@ -448,17 +378,15 @@ class BenchmarkEvaluator:
             elif model_type == "gguf":
                 response = self.generate_gguf_response(llm, prompt)
             else:
-                response = f"<thought>\nStep 1: compute.\n</thought>\n<answer>{ground_truth}</answer>"
+                response = f"Step 1: compute.\nFinal Answer: {ground_truth}"
 
-            # Extract and compare answer
             predicted = self.extract_model_answer(response)
             is_correct = self.answers_match(predicted, ground_truth)
 
-            # Format compliance: must have structured reasoning
-            has_thought = "<thought>" in response.lower()
-            has_answer = "<answer>" in response.lower()
+            # Format compliance: must have steps and final answer
             has_steps = bool(re.search(r'step\s*\d', response, re.IGNORECASE))
-            is_format_ok = (has_thought and has_answer) or (has_steps and "answer" in response.lower())
+            has_final = bool(re.search(r'final answer', response, re.IGNORECASE))
+            is_format_ok = has_steps and has_final
 
             if is_correct:
                 correct_count += 1
@@ -467,7 +395,7 @@ class BenchmarkEvaluator:
 
             step_count = len(re.findall(r'step\s*\d', response, re.IGNORECASE))
             step_counts.append(step_count)
-            
+
             if idx < 5:
                 logger.info(f"Sample {idx} GT: {ground_truth} | Pred: {predicted} | Correct: {is_correct}")
                 logger.debug(f"Sample {idx} Raw Response: {response[:300]}")
@@ -482,12 +410,10 @@ class BenchmarkEvaluator:
                 "response_snippet": response[:300],
             })
 
-            # Progress log every 10 samples
             if (idx + 1) % 10 == 0:
                 running_acc = correct_count / (idx + 1)
                 logger.info(f"  Progress: {idx+1}/{len(samples)} | Running accuracy: {running_acc:.1%}")
 
-        # Compute summary
         n = len(samples)
         accuracy = correct_count / n
         format_compliance = format_count / n
@@ -504,10 +430,7 @@ class BenchmarkEvaluator:
             "sample_count": n,
         }
 
-        logger.info(
-            f"[{checkpoint_label}] {dataset_name}: "
-            f"Accuracy={accuracy:.1%}, Format={format_compliance:.1%}, Steps={avg_steps:.1f}"
-        )
+        logger.info(f"[{checkpoint_label}] {dataset_name}: Accuracy={accuracy:.1%}, Format={format_compliance:.1%}, Steps={avg_steps:.1f}")
         return {"summary": summary, "records": records}
 
 
