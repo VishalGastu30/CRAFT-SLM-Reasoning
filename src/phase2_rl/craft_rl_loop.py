@@ -735,6 +735,7 @@ def train_rl(
                         ref_model=ref_model,
                         tokenizer=tokenizer,
                         contrastive_pairs=contrastive_pairs,
+                        beta=kl_controller.get_beta(),
                         device=device,
                     )
                     dpo_loss_val = dpo_loss.item()
@@ -789,7 +790,9 @@ def train_rl(
         )
         
         # Safety check: if success rate is very low, step back the difficulty bounds
-        if mean_success < 0.1 and step > 50:
+        # IMPORTANT: Only collapse if the question was from the core math curriculum (gsm8k).
+        # We don't want to collapse math difficulty just because it struggled on a new StrategyQA logic question.
+        if mean_success < 0.1 and step > 50 and question_data.get("dataset", "") == "gsm8k":
              curriculum.collapse_temporarily()
         
         # ── KL CONTROLLER: Adjust beta based on measured KL ─────────────────

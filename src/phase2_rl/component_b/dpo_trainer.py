@@ -8,9 +8,8 @@ class StepDPOTrainer:
     Supervises the model to prefer mathematically/logically sound reasoning steps
     over flawed steps under identical previous contexts.
     """
-    def __init__(self, beta=0.1):
-        self.beta = beta
-        logger.info(f"StepDPOTrainer initialized with beta={self.beta}")
+    def __init__(self):
+        logger.info("StepDPOTrainer initialized. Beta will be provided dynamically per step.")
 
     def compute_step_logps(self, model, tokenizer, prompt: str, target_step: str) -> torch.Tensor:
         """
@@ -51,7 +50,7 @@ class StepDPOTrainer:
         # Use mean for length-invariance
         return per_token_logps.mean(dim=-1)
 
-    def compute_dpo_loss(self, model, ref_model, tokenizer, prompt: str, chosen: str, rejected: str) -> torch.Tensor:
+    def compute_dpo_loss(self, model, ref_model, tokenizer, prompt: str, chosen: str, rejected: str, beta: float) -> torch.Tensor:
         """
         Computes step-level DPO loss:
         L_DPO = -log_sigmoid(beta * ( (logps_policy_chosen - logps_ref_chosen) - (logps_policy_rejected - logps_ref_rejected) ))
@@ -74,10 +73,10 @@ class StepDPOTrainer:
         policy_ratio = policy_chosen_logps - policy_rejected_logps
         ref_ratio = ref_chosen_logps - ref_rejected_logps
         
-        loss = -F.logsigmoid(self.beta * (policy_ratio - ref_ratio))
+        loss = -F.logsigmoid(beta * (policy_ratio - ref_ratio))
         return loss.mean()
 
-    def compute_loss(self, policy_model, ref_model, tokenizer, contrastive_pairs: list, device: str = "cuda") -> torch.Tensor:
+    def compute_loss(self, policy_model, ref_model, tokenizer, contrastive_pairs: list, beta: float, device: str = "cuda") -> torch.Tensor:
         """
         Computes the mean DPO loss over a list of contrastive pairs.
         Wrapper compatibility method matching the new craft_rl_loop interface.
@@ -96,7 +95,8 @@ class StepDPOTrainer:
                 tokenizer=tokenizer,
                 prompt=pair["prompt"],
                 chosen=pair["chosen"],
-                rejected=pair["rejected"]
+                rejected=pair["rejected"],
+                beta=beta
             )
             dpo_losses.append(loss)
             
