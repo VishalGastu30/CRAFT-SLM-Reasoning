@@ -319,26 +319,14 @@ def train_rl(config_name, hardware, output_dir, resume=False):
         else:
             logger.warning(f"Step {step}: loss has no grad, skipping update")
 
-        # ----- Cleanup memory -----
-        del prompt_ids, generated_ids, responses, rewards
-        del total_loss, grpo_loss_val, kl_loss_val
-
-        # ----- Update curriculum & KL -----
+        # ----- Update curriculum & KL (use kl_loss_val before deletion) -----
         curriculum.update_accuracy(question_id=question_data.get("id", ""), is_correct=(mean_success > 0))
-        # Safety: if success is 0 for 3 consecutive steps and question is from GSM8K, collapse
         if mean_success == 0.0 and step > 50 and question_data.get("dataset", "gsm8k") == "gsm8k":
             curriculum.collapse_temporarily()
 
-        current_beta = kl_controller.step(kl_loss_val)
+        current_beta = kl_controller.step(kl_loss_val)   # kl_loss_val still alive
 
-        # ----- Periodic memory flush -----
-        if step % 50 == 0:
-            import gc
-            gc.collect()
-            torch.cuda.empty_cache()
-            logger.info(f"Step {step} memory: {torch.cuda.memory_allocated()/1e9:.2f}GB")
-
-        # ----- Logging -----
+        # ----- Logging (still needs kl_loss_val) -----
         if step % 5 == 0:
             logger.info(
                 f"[Step {step}] mean_reward={mean_reward:.4f}, mean_success={mean_success:.4f}, "
@@ -355,6 +343,17 @@ def train_rl(config_name, hardware, output_dir, resume=False):
                 "curriculum_max": curriculum.current_range[1]
             })
             logger.info(f"Checkpoint saved at step {step}")
+
+        # ----- Cleanup memory (now safe to delete tensors and loss values) -----
+        del prompt_ids, generated_ids, responses, rewards
+        del total_loss, grpo_loss_val, kl_loss_val
+
+        # ----- Periodic memory flush -----
+        if step % 50 == 0:
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+            logger.info(f"Step {step} memory: {torch.cuda.memory_allocated()/1e9:.2f}GB")
 
         step += 1
 
