@@ -640,7 +640,7 @@ def train_rl(
     # Initialize Component B (Contrastive Step DPO)
     trace_generator = TraceGenerator(policy_model, tokenizer, device)
     contrastive_builder = ContrastiveBuilder()
-    dpo_trainer = StepDPOTrainer(beta=0.1)
+    dpo_trainer = StepDPOTrainer()
     COMPONENT_B_START_STEP = 100  # Delay B until policy is stable
     
     # ─── MAIN TRAINING LOOP ──────────────────────────────────────────────────
