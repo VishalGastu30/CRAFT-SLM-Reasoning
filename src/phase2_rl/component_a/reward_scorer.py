@@ -20,11 +20,36 @@ def extract_ground_truth(question_data: dict) -> str:
         return num.group(1).replace(',', '')
     return raw.strip()
 
+
 def extract_model_answer(response_text: str) -> str:
+    """
+    Extract final answer from model output.
+    Prioritizes the format the SFT model was trained on: "Final Answer: X"
+    Falls back to XML tags and other patterns for compatibility.
+    """
     if not response_text:
         return ""
     text = response_text.strip()
-    # Priority 1: <answer> tags
+    
+    # Priority 1: "Final Answer: X" (what SFT model produces)
+    final_match = re.search(r'Final Answer:\s*([^\n]+)', text, re.IGNORECASE)
+    if final_match:
+        ans = final_match.group(1).strip()
+        # Extract number from answer (e.g., "6 apples" → "6")
+        num = re.search(r'([+\-]?\d[\d,]*(?:\.\d+)?)', ans)
+        if num:
+            return num.group(1).replace(',', '')
+        # Extract yes/no
+        yn = re.search(r'\b(yes|no)\b', ans, re.IGNORECASE)
+        if yn:
+            return yn.group(1).lower()
+        # Extract letter (A, B, C, D)
+        letter = re.search(r'\b([A-D])\b', ans, re.IGNORECASE)
+        if letter:
+            return letter.group(1).upper()
+        return ans
+    
+    # Priority 2: <answer> tags (fallback for any XML-formatted data)
     xml = re.search(r'<answer>\s*([\s\S]*?)\s*</answer>', text, re.IGNORECASE)
     if xml:
         inner = xml.group(1).strip()
@@ -38,27 +63,25 @@ def extract_model_answer(response_text: str) -> str:
         if letter:
             return letter.group(1).upper()
         return inner
-    # Priority 2: "Final Answer: X"
-    for pat in [
-        r'(?:final\s+answer|the\s+answer\s+is|answer\s*:)[:\s]*([+\-]?\d[\d,]*(?:\.\d+)?)',
-        r'(?:final\s+answer|answer)[:\s]*(yes|no)\b'
-    ]:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            return m.group(1).replace(',', '')
-    # Priority 3: #### format
+    
+    # Priority 3: #### format (GSM8K native)
     gsm = re.search(r'####\s*([+\-]?\d[\d,]*(?:\.\d+)?)', text)
     if gsm:
         return gsm.group(1).replace(',', '')
-    # Priority 4: last number after </thought>
+    
+    # Priority 4: last number after any </thought> (if any)
     after_thought = re.sub(r'<thought>[\s\S]*?</thought>', '', text, flags=re.IGNORECASE)
     nums = re.findall(r'([+\-]?\d[\d,]*(?:\.\d+)?)', after_thought)
     if nums:
         return nums[-1].replace(',', '')
+    
+    # Priority 5: yes/no anywhere
     yn2 = re.search(r'\b(yes|no)\b', after_thought, re.IGNORECASE)
     if yn2:
         return yn2.group(1).lower()
+    
     return ""
+
 
 def answers_match(model_answer: str, ground_truth: str) -> bool:
     if not model_answer or not ground_truth:
@@ -79,6 +102,7 @@ def answers_match(model_answer: str, ground_truth: str) -> bool:
         return True
     return False
 
+
 def extract_steps(response_text: str) -> list:
     if not response_text:
         return []
@@ -95,6 +119,7 @@ def extract_steps(response_text: str) -> list:
         return splits2
     lines = [l.strip() for l in working.split('\n') if len(l.strip()) > 5]
     return lines if lines else [working]
+
 
 class RewardScorer:
     def __init__(self):
@@ -113,6 +138,7 @@ class RewardScorer:
         steps = extract_steps(response_text)
         step_score = self._verifier.score_steps(steps)
         R_A = 0.4 * float(correct) + 0.6 * step_score
+        # Small format bonus (optional, not required)
         has_format = ('<thought>' in response_text.lower() and '<answer>' in response_text.lower())
         if has_format:
             R_A = min(1.0, R_A + 0.05)
