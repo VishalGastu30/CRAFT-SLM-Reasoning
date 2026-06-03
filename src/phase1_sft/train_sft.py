@@ -1,13 +1,13 @@
 import os
 import argparse
 from transformers import (
-    AutoTokenizer, 
-    AutoModelForCausalLM, 
-    BitsAndBytesConfig, 
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    BitsAndBytesConfig,
     TrainingArguments,
     TrainerCallback
 )
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, prepare_model_for_kbit_training
 from trl import SFTTrainer
 import torch
 from loguru import logger
@@ -19,14 +19,13 @@ from src.config import load_config
 from src.phase1_sft.sft_config import SFTConfig
 from src.phase1_sft.data_loader import create_training_dataset
 
+
 class CheckpointCallback(TrainerCallback):
-    """Callback to handle custom checkpointing during SFT training."""
     def __init__(self, manager, keep_n=3):
         self.manager = manager
         self.keep_n = keep_n
 
     def on_save(self, args, state, control, **kwargs):
-        # We write metadata into the checkpoint directory
         step = state.global_step
         metadata = {
             "global_step": step,
@@ -41,39 +40,39 @@ class CheckpointCallback(TrainerCallback):
         )
         self.manager.cleanup(keep_n=self.keep_n)
 
+
 def train_sft(config_name="phi3_mini", hardware_name="kaggle", output_dir="checkpoints/sft", resume=False):
-    """Main training function for SFT warmup."""
     setup_logger()
     logger.info("Initializing SFT Warmup (Phase 1)...")
-    
-    # 1. Load config and merge hardware profile
+
+    # 1. Load base config and hardware profile
     raw_config = load_config(config_name, hardware_name)
     hw_profile = detect_hardware()
-    
+
     sft_cfg = SFTConfig(
         model_name_or_path=raw_config["model"]["name"],
         max_seq_length=raw_config["model"]["max_seq_length"],
-        gsm8k_fraction=raw_config["probe"]["sampling_fractions"].get("gsm8k", 0.6),
-        aqua_fraction=raw_config["probe"]["sampling_fractions"].get("aqua_rat", 0.4),
-        epochs=raw_config["sft"].get("epochs", 3),
-        learning_rate=float(raw_config["sft"].get("learning_rate", 2e-4)),
-        lora_rank=raw_config["sft"].get("lora_rank", 64),
-        lora_alpha=raw_config["sft"].get("lora_alpha", 128),
+        gsm8k_fraction=raw_config.get("sft", {}).get("gsm8k_fraction", 0.40),
+        aqua_fraction=raw_config.get("sft", {}).get("aqua_fraction", 0.20),
+        strategyqa_fraction=raw_config.get("sft", {}).get("strategyqa_fraction", 0.20),
+        mmlu_fraction=raw_config.get("sft", {}).get("mmlu_fraction", 0.20),
+        epochs=raw_config.get("sft", {}).get("epochs", 3),
+        learning_rate=float(raw_config.get("sft", {}).get("learning_rate", 2e-4)),
+        lora_rank=raw_config.get("sft", {}).get("lora_rank", 64),
+        lora_alpha=raw_config.get("sft", {}).get("lora_alpha", 128),
         output_dir=output_dir,
     )
     sft_cfg.update_from_profile(hw_profile)
-    
-    # Initialize checkpoint manager
-    manager = CheckpointManager(sft_cfg.output_dir)
-    
-    # 2. Configure QLoRA quantization settings
+
+    # 2. Tokenizer
     logger.info(f"Loading tokenizer & base model: {sft_cfg.model_name_or_path}")
     tokenizer = AutoTokenizer.from_pretrained(sft_cfg.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-        
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
+
+    # 3. Quantization and model loading
     if device == "cuda":
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -81,7 +80,6 @@ def train_sft(config_name="phi3_mini", hardware_name="kaggle", output_dir="check
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.float16
         )
-        
         model = AutoModelForCausalLM.from_pretrained(
             sft_cfg.model_name_or_path,
             quantization_config=bnb_config,
@@ -90,14 +88,14 @@ def train_sft(config_name="phi3_mini", hardware_name="kaggle", output_dir="check
         )
         model = prepare_model_for_kbit_training(model)
     else:
-        logger.warning("No CUDA device detected. Running model training on CPU (very slow!).")
+        logger.warning("No CUDA – training on CPU (very slow!).")
         model = AutoModelForCausalLM.from_pretrained(
             sft_cfg.model_name_or_path,
             device_map="cpu",
             trust_remote_code=True
         )
 
-    # 3. Configure PEFT (LoRA) settings
+    # 4. LoRA config
     peft_config = LoraConfig(
         r=sft_cfg.lora_rank,
         lora_alpha=sft_cfg.lora_alpha,
@@ -106,16 +104,18 @@ def train_sft(config_name="phi3_mini", hardware_name="kaggle", output_dir="check
         bias="none",
         task_type="CAUSAL_LM"
     )
-    
-    # 4. Load training dataset
+
+    # 5. Training dataset (now with 4 datasets)
     train_dataset = create_training_dataset(
         tokenizer=tokenizer,
-        gsm_fraction=sft_cfg.gsm8k_fraction,
+        gsm8k_fraction=sft_cfg.gsm8k_fraction,
         aqua_fraction=sft_cfg.aqua_fraction,
+        strategyqa_fraction=sft_cfg.strategyqa_fraction,
+        mmlu_fraction=sft_cfg.mmlu_fraction,
         seed=sft_cfg.train_split_seed
     )
-    
-    # 5. Set up HF Training Arguments
+
+    # 6. HF TrainingArguments
     training_args = TrainingArguments(
         output_dir=sft_cfg.output_dir,
         num_train_epochs=sft_cfg.epochs,
@@ -134,8 +134,12 @@ def train_sft(config_name="phi3_mini", hardware_name="kaggle", output_dir="check
         remove_unused_columns=True,
         report_to="none"
     )
-    
-    # 6. Initialize SFTTrainer
+
+    # 7. Checkpoint manager callback
+    manager = CheckpointManager(sft_cfg.output_dir)
+    callback = CheckpointCallback(manager)
+
+    # 8. SFTTrainer
     trainer = SFTTrainer(
         model=model,
         train_dataset=train_dataset,
@@ -144,33 +148,34 @@ def train_sft(config_name="phi3_mini", hardware_name="kaggle", output_dir="check
         max_seq_length=sft_cfg.max_seq_length,
         tokenizer=tokenizer,
         args=training_args,
-        callbacks=[CheckpointCallback(manager)]
+        callbacks=[callback]
     )
-    
-    # 7. Start SFT Training
+
+    # 9. Resume logic
     resume_from_checkpoint = None
     if resume:
         metadata, checkpoint_path = manager.get_latest()
         if checkpoint_path:
-            logger.info(f"Resuming SFT training from latest checkpoint: {checkpoint_path}")
+            logger.info(f"Resuming from checkpoint: {checkpoint_path}")
             resume_from_checkpoint = checkpoint_path
-            
-    logger.info("Starting SFT training...")
+
+    logger.info("Starting SFT training (4‑dataset mix)...")
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    
-    # 8. Save final model
+
+    # 10. Save final model
     final_model_dir = os.path.join(sft_cfg.output_dir, "final")
-    logger.info(f"Saving final SFT Warmup model weights to {final_model_dir}...")
+    logger.info(f"Saving final SFT model to {final_model_dir}")
     trainer.model.save_pretrained(final_model_dir)
     tokenizer.save_pretrained(final_model_dir)
     logger.info("SFT training completed successfully.")
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Phase 1: SFT Warmup")
-    parser.add_argument("--config", type=str, default="phi3_mini", help="Model config name")
-    parser.add_argument("--hardware", type=str, default="kaggle", help="Hardware profile name")
-    parser.add_argument("--output", type=str, default="checkpoints/sft", help="Output directory")
-    parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint if exists")
+    parser = argparse.ArgumentParser(description="Phase 1: SFT Warmup (all 4 datasets)")
+    parser.add_argument("--config", default="phi3_mini")
+    parser.add_argument("--hardware", default="kaggle")
+    parser.add_argument("--output", default="checkpoints/sft")
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
     train_sft(
