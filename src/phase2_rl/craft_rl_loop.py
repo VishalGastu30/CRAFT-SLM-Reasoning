@@ -269,6 +269,10 @@ def train_rl(config_name, hardware, output_dir, resume=False):
 
     logger.info(f"Training from step {start_step} to {TOTAL_STEPS}")
     step = start_step
+    
+    # Consecutive zero-success counter (prevents over-collapse)
+    zero_success_counter = 0
+    
     while step <= TOTAL_STEPS:
         # ----- Question sampling -----
         if step < MULTI_DATASET_START_STEP:
@@ -339,8 +343,15 @@ def train_rl(config_name, hardware, output_dir, resume=False):
 
         # ----- Update curriculum & KL (use kl_loss_val before deletion) -----
         curriculum.update_accuracy(question_id=question_data.get("id", ""), is_correct=(mean_success > 0))
+        
+        # Collapse only if zero success for 3 consecutive steps AND it's a GSM8K question
         if mean_success == 0.0 and step > 50 and question_data.get("dataset", "gsm8k") == "gsm8k":
-            curriculum.collapse_temporarily()
+            zero_success_counter += 1
+            if zero_success_counter >= 3:
+                curriculum.collapse_temporarily()
+                zero_success_counter = 0
+        else:
+            zero_success_counter = 0
 
         current_beta = kl_controller.step(kl_loss_val)   # kl_loss_val still alive
 
