@@ -65,7 +65,7 @@ class DifficultyMapper:
                 "capability": capability_score,
                 "difficulty": difficulty
             }
-            
+
             if (i + 1) % 10 == 0:
                 logger.info(f"Probed {i + 1}/{len(questions)} questions...")
 
@@ -73,14 +73,12 @@ class DifficultyMapper:
         return self.difficulty_map
 
     def save_map(self, path="difficulty_map.json"):
-        """Saves the difficulty map to a JSON file."""
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "w") as f:
             json.dump(self.difficulty_map, f, indent=2)
         logger.info(f"Saved difficulty map ({len(self.difficulty_map)} items) to {path}")
 
     def load_map(self, path="difficulty_map.json"):
-        """Loads the difficulty map from a JSON file."""
         if not os.path.exists(path):
             raise FileNotFoundError(f"Difficulty map not found at {path}")
         with open(path, "r") as f:
@@ -89,10 +87,6 @@ class DifficultyMapper:
         return self.difficulty_map
 
     def get_learning_zone(self, low=0.4, high=0.7):
-        """
-        Returns a list of question IDs that fall within the specified difficulty zone.
-        By default, the 'learning zone' is 0.4 to 0.7 (inclusive).
-        """
         learning_zone_questions = []
         for q_id, info in self.difficulty_map.items():
             diff = info.get("difficulty", 0.5)
