@@ -9,12 +9,13 @@ from src.utils.hardware_detector import detect_hardware
 from src.config import load_config
 from src.phase0_probe.difficulty_mapper import DifficultyMapper
 
+
 class CapabilityProbe:
     """
-    Main runner class for Phase 0 Capability Probe.
-    Downloads the probe datasets, samples questions, initializes the model,
-    and runs the DifficultyMapper to produce difficulty_map.json.
+    Main runner for Phase 0 Capability Probe.
+    Probes GSM8K, AQuA-RAT, StrategyQA, and MMLU to build difficulty_map.json.
     """
+
     def __init__(self, config):
         self.config = config
         self.probe_cfg = config.get("probe", {})
@@ -23,141 +24,144 @@ class CapabilityProbe:
 
     def load_probe_datasets(self):
         """
-        Loads GSM8K, StrategyQA, and MMLU datasets and samples questions.
-        Returns a list of questions: [{"id": str, "question": str, "answer": str, "dataset": str}]
+        Loads all four datasets and samples a fixed number of questions.
+        Returns a list of dicts with keys: id, question, answer, dataset.
         """
         logger.info("Loading probing datasets from HuggingFace...")
         questions = []
 
-        # 1. GSM8K (80 questions)
+        # ---- 1. GSM8K (80 questions) ----
         try:
-            gsm8k = load_dataset("gsm8k", "main", split="test")
-            gsm8k_samples = gsm8k.shuffle(seed=42).select(range(min(80, len(gsm8k))))
-            for idx, item in enumerate(gsm8k_samples):
+            gsm = load_dataset("gsm8k", "main", split="test")
+            gsm_samples = gsm.shuffle(seed=42).select(range(min(80, len(gsm))))
+            for idx, item in enumerate(gsm_samples):
                 questions.append({
                     "id": f"gsm8k_{idx}",
                     "question": item["question"],
                     "answer": item["answer"],
                     "dataset": "gsm8k"
                 })
-            logger.info(f"Loaded {len(gsm8k_samples)} GSM8K questions.")
+            logger.info(f"Loaded {len(gsm_samples)} GSM8K questions.")
         except Exception as e:
-            logger.warning(f"Failed to load GSM8K from HuggingFace: {e}. Using mock questions.")
+            logger.warning(f"GSM8K load failed: {e}. Using mock.")
             self._add_mock_gsm8k(questions)
 
-        # 2. StrategyQA (60 questions)
+        # ---- 2. AQuA-RAT (40 questions) ----
         try:
-            # Load StrategyQA via wza/strategyqa
-            sqa = load_dataset("wza/strategyqa", split="train")
-            sqa_samples = sqa.shuffle(seed=42).select(range(min(60, len(sqa))))
+            aqua = load_dataset("aqua_rat", split="train")
+            aqua_samples = aqua.shuffle(seed=42).select(range(min(40, len(aqua))))
+            for idx, item in enumerate(aqua_samples):
+                # AQuA stores options as a list of strings
+                options = item["options"]
+                choice_str = "\n".join([f"{chr(65+i)}. {opt}" for i, opt in enumerate(options)])
+                full_question = f"{item['question']}\n{choice_str}"
+                # Correct answer is a letter (e.g., "A")
+                answer_letter = item["correct"]
+                questions.append({
+                    "id": f"aqua_{idx}",
+                    "question": full_question,
+                    "answer": answer_letter,
+                    "dataset": "aqua_rat"
+                })
+            logger.info(f"Loaded {len(aqua_samples)} AQuA-RAT questions.")
+        except Exception as e:
+            logger.warning(f"AQuA-RAT load failed: {e}. Using mock.")
+            self._add_mock_aqua(questions)
+
+        # ---- 3. StrategyQA (40 questions) ----
+        try:
+            # Use the alternative source (ChilleD/StrategyQA) which is more reliable
+            sqa = load_dataset("ChilleD/StrategyQA", split="train")
+            sqa_samples = sqa.shuffle(seed=42).select(range(min(40, len(sqa))))
             for idx, item in enumerate(sqa_samples):
+                # Answer is boolean True/False
+                answer = "yes" if item["answer"] else "no"
                 questions.append({
                     "id": f"strategyqa_{idx}",
                     "question": item["question"],
-                    "answer": "yes" if item["answer"] else "no",
+                    "answer": answer,
                     "dataset": "strategyqa"
                 })
             logger.info(f"Loaded {len(sqa_samples)} StrategyQA questions.")
         except Exception as e:
-            logger.warning(f"Failed to load StrategyQA: {e}. Using mock questions.")
+            logger.warning(f"StrategyQA load failed: {e}. Using mock.")
             self._add_mock_strategyqa(questions)
 
-        # 3. MMLU (60 questions)
+        # ---- 4. MMLU (40 questions, sample across subjects) ----
         try:
-            mmlu = load_dataset("cais/mmlu", "college_mathematics", split="test")
-            mmlu_samples = mmlu.shuffle(seed=42).select(range(min(60, len(mmlu))))
-            for idx, item in enumerate(mmlu_samples):
-                # Convert multiple choice to simple letter answer
+            # Use the 'auxiliary_train' split for variety
+            mmlu = load_dataset("cais/mmlu", "all", split="auxiliary_train")
+            # Sample 40 questions by taking every N-th element
+            total = len(mmlu)
+            step = max(1, total // 40)
+            indices = list(range(0, total, step))[:40]
+            for idx, i in enumerate(indices):
+                item = mmlu[i]
                 choices = item["choices"]
-                correct_idx = item["answer"]
-                answer_letter = ["A", "B", "C", "D"][correct_idx]
-                
-                # Format question with choices
-                choice_str = "\n".join([f"{l}. {c}" for l, c in zip(["A", "B", "C", "D"], choices)])
-                full_q = f"{item['question']}\nChoices:\n{choice_str}"
-                
+                choice_str = "\n".join([f"{chr(65+i)}. {c}" for i, c in enumerate(choices)])
+                full_question = f"{item['question']}\n{choice_str}"
+                answer_letter = ["A", "B", "C", "D"][item["answer"]]
                 questions.append({
                     "id": f"mmlu_{idx}",
-                    "question": full_q,
+                    "question": full_question,
                     "answer": answer_letter,
                     "dataset": "mmlu"
                 })
-            logger.info(f"Loaded {len(mmlu_samples)} MMLU questions.")
+            logger.info(f"Loaded {len(indices)} MMLU questions.")
         except Exception as e:
-            logger.warning(f"Failed to load MMLU: {e}. Using mock questions.")
+            logger.warning(f"MMLU load failed: {e}. Using mock.")
             self._add_mock_mmlu(questions)
 
+        logger.info(f"Total probed questions: {len(questions)}")
         return questions
 
+    # ----- Mock fallbacks (kept short) -----
     def _add_mock_gsm8k(self, questions):
-        mock_data = [
-            ("If Weng earns $12 an hour baby-sitting and works 5 hours, how much does she earn?", "60"),
-            ("A farmer has 15 cows and 12 sheep. How many animals does he have in total?", "27"),
-            ("What is 15% of 240?", "36"),
-            ("A train travels at 60 mph for 3 hours. How far does it travel in miles?", "180"),
-            ("John buys 3 books for $10 each and a bag for $15. How much did he spend in total?", "45")
+        mock = [
+            ("If Weng earns $12/hour for 5 hours, how much?", "60"),
+            ("A farmer has 15 cows and 12 sheep. Total animals?", "27"),
+            ("What is 15% of 240?", "36")
         ]
-        for idx, (q, a) in enumerate(mock_data):
-            questions.append({
-                "id": f"gsm8k_mock_{idx}",
-                "question": q,
-                "answer": a,
-                "dataset": "gsm8k"
-            })
+        for i, (q, a) in enumerate(mock):
+            questions.append({"id": f"gsm8k_mock_{i}", "question": q, "answer": a, "dataset": "gsm8k"})
+
+    def _add_mock_aqua(self, questions):
+        mock = [
+            ("What is 2+2? Options:\nA. 3\nB. 4\nC. 5\nD. 6", "B"),
+            ("Solve for x: 2x = 10\nA. 2\nB. 5\nC. 10\nD. 20", "B")
+        ]
+        for i, (q, a) in enumerate(mock):
+            questions.append({"id": f"aqua_mock_{i}", "question": q, "answer": a, "dataset": "aqua_rat"})
 
     def _add_mock_strategyqa(self, questions):
-        mock_data = [
-            ("Would a penguin survive in the Sahara desert?", "no"),
-            ("Can a human run faster than a cheetah?", "no"),
-            ("Is a violin a string instrument?", "yes"),
-            ("Can you write a book on a typewriter?", "yes")
+        mock = [
+            ("Would a penguin survive in the Sahara?", "no"),
+            ("Is a violin a string instrument?", "yes")
         ]
-        for idx, (q, a) in enumerate(mock_data):
-            questions.append({
-                "id": f"strategyqa_mock_{idx}",
-                "question": q,
-                "answer": a,
-                "dataset": "strategyqa"
-            })
+        for i, (q, a) in enumerate(mock):
+            questions.append({"id": f"strategyqa_mock_{i}", "question": q, "answer": a, "dataset": "strategyqa"})
 
     def _add_mock_mmlu(self, questions):
-        mock_data = [
-            ("What is the derivative of x^2 with respect to x?\nA. 2x\nB. x\nC. 2\nD. 1", "A"),
-            ("Which of the following is a prime number?\nA. 4\nB. 9\nC. 11\nD. 15", "C")
+        mock = [
+            ("What is the capital of France?\nA. London\nB. Paris\nC. Rome\nD. Berlin", "B"),
+            ("Which planet is known as the Red Planet?\nA. Earth\nB. Mars\nC. Jupiter\nD. Saturn", "B")
         ]
-        for idx, (q, a) in enumerate(mock_data):
-            questions.append({
-                "id": f"mmlu_mock_{idx}",
-                "question": q,
-                "answer": a,
-                "dataset": "mmlu"
-            })
+        for i, (q, a) in enumerate(mock):
+            questions.append({"id": f"mmlu_mock_{i}", "question": q, "answer": a, "dataset": "mmlu"})
 
     def run(self, output_path="difficulty_map.json", dry_run=False):
-        """
-        Executes the capability probe.
-        If dry_run=True, runs without loading the model (useful for local verification).
-        """
         setup_logger()
-        logger.info("Starting Phase 0 Capability Probe...")
-        
+        logger.info("Starting Phase 0 Capability Probe (4 benchmarks)...")
+
         questions = self.load_probe_datasets()
-        
         model = None
         tokenizer = None
-        
+
         if not dry_run:
             model_name = self.model_cfg.get("name", "microsoft/Phi-3-mini-4k-instruct")
-            logger.info(f"Loading model {model_name} for capability probe...")
-            
+            logger.info(f"Loading model {model_name}...")
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            
-            # Load in 4-bit for speed and resource limits
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            
-            # Phase 0 is inference-only (no training), so we load in bfloat16
-            # without quantization. This avoids any bitsandbytes CUDA dependency.
-            # Phi-3-mini in bfloat16 = ~7.6GB — fits easily in Kaggle's 32GB VRAM.
             if device == "cuda":
                 model = AutoModelForCausalLM.from_pretrained(
                     model_name,
@@ -173,9 +177,9 @@ class CapabilityProbe:
                     trust_remote_code=True,
                 )
         else:
-            logger.info("Running in DRY RUN mode. Using simulated/mock generations.")
+            logger.info("DRY RUN – using mock generations.")
 
-        # Probe model to build map
+        # Build difficulty map
         self.mapper.build_map(
             model=model,
             tokenizer=tokenizer,
@@ -183,25 +187,24 @@ class CapabilityProbe:
             n_samples=self.probe_cfg.get("n_samples", 5),
             temperature=self.probe_cfg.get("temperature", 0.8)
         )
-        
-        # Save map
         self.mapper.save_map(output_path)
-        
-        # Log bucket statistics
+
+        # Statistics
         diffs = [v["difficulty"] for v in self.mapper.difficulty_map.values()]
         buckets = {
             "easy [0.0-0.3]": len([d for d in diffs if d <= 0.3]),
             "medium [0.4-0.7]": len([d for d in diffs if 0.4 <= d <= 0.7]),
             "hard [0.8-1.0]": len([d for d in diffs if d >= 0.8])
         }
-        logger.info(f"Capability Probe completed. Statistics: {buckets}")
+        logger.info(f"Probe completed. Statistics: {buckets}")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Phase 0: Capability Probe")
-    parser.add_argument("--config", type=str, default="phi3_mini", help="Model config name")
-    parser.add_argument("--hardware", type=str, default="kaggle", help="Hardware profile name")
-    parser.add_argument("--output", type=str, default="difficulty_map.json", help="Output path")
-    parser.add_argument("--dry-run", action="store_true", help="Run without loading active model weights")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="phi3_mini")
+    parser.add_argument("--hardware", default="kaggle")
+    parser.add_argument("--output", default="difficulty_map.json")
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     config = load_config(args.config, args.hardware)
