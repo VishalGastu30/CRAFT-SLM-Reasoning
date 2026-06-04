@@ -2,6 +2,14 @@ from typing import List, Dict, Any
 from .step_parser import StepParser
 from src.phase2_rl.component_a.reward_scorer import RewardScorer
 
+# System prompt – exactly as used in Phase 1 SFT
+SYSTEM_PROMPT = (
+    "You are a reasoning assistant. Solve the problem step by step. "
+    "You MUST format your explanation as a sequence of steps starting with "
+    "'Step 1:', 'Step 2:', etc. You MUST end your response with 'Final Answer: [value]' "
+    "where [value] is the short final answer (number, yes/no, or letter)."
+)
+
 class ContrastiveBuilder:
     """
     Builds contrastive preference pairs at the step level.
@@ -32,7 +40,7 @@ class ContrastiveBuilder:
                 from src.phase2_rl.component_a.execution_verifier import verify_step_arithmetic
                 correct_count, total_count = verify_step_arithmetic(step_text)
                 if total_count == 0:
-                    step_rewards.append(1.0) # Assume non-math text steps are correct
+                    step_rewards.append(1.0)  # Assume non-math text steps are correct
                 else:
                     step_rewards.append(1.0 if correct_count == total_count else 0.0)
                 
@@ -50,10 +58,11 @@ class ContrastiveBuilder:
                 t1 = parsed_traces[i]
                 t2 = parsed_traces[j]
                 
-                # Check up to the minimum step length between the two traces
                 min_steps = min(len(t1["steps"]), len(t2["steps"]))
                 
-                prefix_context = f"<|user|>\n{question}\n<|assistant|>\n"
+                # Build prompt with system + user + assistant prefix
+                # Matches Phase 1 SFT format exactly
+                prefix_context = f"<|system|>\n{SYSTEM_PROMPT}\n<|user|>\n{question}\n<|assistant|>\n"
                 
                 for step_idx in range(min_steps):
                     s1 = t1["steps"][step_idx]["content"]
@@ -62,7 +71,6 @@ class ContrastiveBuilder:
                     r1 = t1["rewards"][step_idx]
                     r2 = t2["rewards"][step_idx]
                     
-                    # If steps differ and one is correct while the other is incorrect
                     if s1 != s2 and r1 != r2:
                         if r1 > r2:
                             chosen = s1
@@ -71,8 +79,7 @@ class ContrastiveBuilder:
                             chosen = s2
                             rejected = s1
                             
-                        # Build prompt context of preceding steps
-                        # This forms the DPO prompt: prompt + previous steps
+                        # Add preceding steps to the prompt
                         dpo_prompt = prefix_context
                         for prev_idx in range(step_idx):
                             dpo_prompt += f"Step {prev_idx + 1}: {t1['steps'][prev_idx]['content']}\n"
@@ -84,23 +91,19 @@ class ContrastiveBuilder:
                             "chosen": chosen,
                             "rejected": rejected
                         })
-                        
-                        # Break to avoid adding multiple contrastive pairs from the same trace bifurcation point
-                        break
+                        break  # One pair per divergence point
                         
         return contrastive_pairs
 
     def build_pairs(self, question_data: dict, response_texts: List[str], rewards: List[float]) -> List[Dict[str, Any]]:
         """
-        Wrapper compatibility method matching the new craft_rl_loop interface.
+        Wrapper compatibility method for craft_rl_loop.
         """
         question = question_data.get("question", question_data.get("problem", ""))
         ground_truth = question_data.get("answer", "")
         dataset_name = question_data.get("dataset", "")
         
-        # Build traces list
         traces = [{"trace_text": text} for text in response_texts]
-        
         return self.build_step_pairs(
             question=question,
             traces=traces,
