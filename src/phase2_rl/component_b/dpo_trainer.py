@@ -1,3 +1,6 @@
+# src/phase2_rl/component_b/dpo_trainer.py
+# Complete corrected file
+
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -16,7 +19,6 @@ class StepDPOTrainer:
         Computes the mean log probability of the tokens in the target_step
         conditioned on the prompt prefix. Multi-GPU safe.
         """
-        # Multi-GPU safe: use first parameter's device
         try:
             device = next(model.parameters()).device
         except StopIteration:
@@ -37,9 +39,11 @@ class StepDPOTrainer:
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = full_ids[..., 1:].contiguous()
 
-        # Slice ONLY the target_step tokens (fix off-by-one: use prompt_len not prompt_len-1)
-        step_logits = shift_logits[:, prompt_len:]
-        step_labels = shift_labels[:, prompt_len:]
+        # The first token of target_step is at position prompt_len (0‑based)
+        # It is predicted by shift_logits at index prompt_len - 1
+        # So we slice from prompt_len - 1 to the end for both logits and labels
+        step_logits = shift_logits[:, prompt_len - 1:]   # FIXED
+        step_labels = shift_labels[:, prompt_len - 1:]   # FIXED
 
         if step_labels.shape[1] == 0:
             return torch.tensor(0.0, device=device)
@@ -47,7 +51,7 @@ class StepDPOTrainer:
         log_probs = F.log_softmax(step_logits, dim=-1)
         per_token_logps = torch.gather(log_probs, dim=-1, index=step_labels.unsqueeze(-1)).squeeze(-1)
 
-        # Use mean for length-invariance
+        # Mean across tokens (length‑invariant)
         return per_token_logps.mean(dim=-1)
 
     def compute_dpo_loss(self, model, ref_model, tokenizer, prompt: str, chosen: str, rejected: str, beta: float) -> torch.Tensor:
@@ -69,7 +73,7 @@ class StepDPOTrainer:
             ref_chosen_logps = policy_chosen_logps.detach() - 0.2
             ref_rejected_logps = policy_rejected_logps.detach() + 0.2
             
-        # DPO equation calculations
+        # DPO equation
         policy_ratio = policy_chosen_logps - policy_rejected_logps
         ref_ratio = ref_chosen_logps - ref_rejected_logps
         
@@ -79,11 +83,9 @@ class StepDPOTrainer:
     def compute_loss(self, policy_model, ref_model, tokenizer, contrastive_pairs: list, beta: float, device: str = "cuda") -> torch.Tensor:
         """
         Computes the mean DPO loss over a list of contrastive pairs.
-        Wrapper compatibility method matching the new craft_rl_loop interface.
+        Limits to 1 pair per step to avoid OOM.
         """
         import random
-        # To prevent OOM, limit the number of pairs processed per step.
-        # Each pair requires 2 forward passes that stay in the computation graph.
         if len(contrastive_pairs) > 1:
             contrastive_pairs = random.sample(contrastive_pairs, 1)
             
