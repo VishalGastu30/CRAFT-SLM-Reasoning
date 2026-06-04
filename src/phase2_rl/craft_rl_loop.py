@@ -21,7 +21,6 @@ from src.utils.hardware_detector import detect_hardware
 from src.config import load_config
 from src.phase0_probe.difficulty_mapper import DifficultyMapper
 from src.phase2_rl.component_a.reward_scorer import RewardScorer
-from src.phase2_rl.component_b.trace_generator import TraceGenerator
 from src.phase2_rl.component_b.contrastive_builder import ContrastiveBuilder
 from src.phase2_rl.component_b.dpo_trainer import StepDPOTrainer
 from src.phase2_rl.component_c.curriculum_engine import CurriculumEngine
@@ -179,8 +178,14 @@ def format_prompt(question_data, tokenizer):
             "You MUST format your explanation as a sequence of steps starting with "
             "'Step 1:', 'Step 2:', etc. You MUST end your response with 'Final Answer: A' (or B, C, D)."
         )
+    elif dataset == "aqua":
+        system = (
+            "You are a reasoning assistant. Answer the multiple-choice question step by step. "
+            "You MUST format your explanation as a sequence of steps starting with "
+            "'Step 1:', 'Step 2:', etc. You MUST end your response with 'Final Answer: A' (or B, C, D, E)."
+        )
     else:
-        # GSM8K / math problems
+        # GSM8K / math problems (including aqua fallback)
         system = (
             "You are a reasoning assistant. Solve the math problem step by step. "
             "You MUST format your explanation as a sequence of steps starting with "
@@ -229,7 +234,7 @@ def train_rl(config_name, hardware, output_dir, resume=False):
     reward_scorer = RewardScorer()
 
     # Multi-dataset sampler (used after step 200)
-    multi_sampler = MultiDatasetSampler(gsm8k_weight=0.5, strategyqa_weight=0.3, mmlu_weight=0.2,
+    multi_sampler = MultiDatasetSampler(gsm8k_weight=0.4, strategyqa_weight=0.25, mmlu_weight=0.20, aqua_weight=0.15,
                                         n_preload=500, difficulty_mapper=difficulty_mapper, curriculum=curriculum)
 
     sft_checkpoint = "checkpoints/sft/final"
@@ -259,7 +264,7 @@ def train_rl(config_name, hardware, output_dir, resume=False):
         kl_controller.reset()
 
     # Component B
-    trace_generator = TraceGenerator(policy_model, tokenizer, device=device, n_traces=4, temperature=0.9)
+    # Note: trace_generator is unused (deprecated) – kept for compatibility, not called
     contrastive_builder = ContrastiveBuilder()
     dpo_trainer = StepDPOTrainer()
     COMPONENT_B_START_STEP = 100
