@@ -1,5 +1,7 @@
 import os
 import argparse
+import torch
+import numpy as np
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -9,7 +11,6 @@ from transformers import (
 )
 from peft import LoraConfig, prepare_model_for_kbit_training
 from trl import SFTTrainer
-import torch
 from loguru import logger
 
 from src.utils.logger import setup_logger
@@ -19,6 +20,22 @@ from src.config import load_config
 from src.phase1_sft.sft_config import SFTConfig
 from src.phase1_sft.data_loader import create_training_dataset
 
+# ──────────────────────────────────────────────────────────────────────────────
+# FIX for PyTorch 2.6+ checkpoint loading
+# Allow legacy checkpoints that use numpy._core.multiarray._reconstruct
+# ──────────────────────────────────────────────────────────────────────────────
+torch.serialization.add_safe_globals([np.core.multiarray._reconstruct])
+
+# Also patch torch.load globally inside this process to use weights_only=False
+_original_load = torch.load
+
+def _patched_load(f, map_location=None, pickle_module=None, **kwargs):
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_load(f, map_location=map_location, pickle_module=pickle_module, **kwargs)
+
+torch.load = _patched_load
+# ──────────────────────────────────────────────────────────────────────────────
 
 class CheckpointCallback(TrainerCallback):
     def __init__(self, manager, keep_n=3):
@@ -105,7 +122,7 @@ def train_sft(config_name="phi3_mini", hardware_name="kaggle", output_dir="check
         task_type="CAUSAL_LM"
     )
 
-    # 5. Training dataset (now with 4 datasets)
+    # 5. Training dataset
     train_dataset = create_training_dataset(
         tokenizer=tokenizer,
         gsm8k_fraction=sft_cfg.gsm8k_fraction,
