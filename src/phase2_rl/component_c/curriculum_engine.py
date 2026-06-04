@@ -80,14 +80,15 @@ class CurriculumEngine:
         return self.sample_batch(batch_size=batch_size)
 
     def expand_range_temporarily(self):
-        self.min_difficulty = max(0.0, round(self.min_difficulty - 0.1, 2))
+        """Expand difficulty bounds when active pool is empty.
+        Now respects the global floor MIN_DIFFICULTY_FLOOR_COLLAPSE (0.35).
+        """
+        self.min_difficulty = max(MIN_DIFFICULTY_FLOOR_COLLAPSE, round(self.min_difficulty - 0.1, 2))
         self.max_difficulty = min(MAX_DIFFICULTY_CEILING, round(self.max_difficulty + 0.1, 2))
         logger.info(f"Temp expansion: [{self.min_difficulty}, {self.max_difficulty}]")
 
     def collapse_temporarily(self):
-        """Step back difficulty bounds if model is failing.
-        Never go below MIN_DIFFICULTY_FLOOR_COLLAPSE and never let max fall below MIN_MAX_DIFFICULTY.
-        """
+        """Step back difficulty bounds if model is failing."""
         old_min, old_max = self.min_difficulty, self.max_difficulty
         self.max_difficulty = max(MIN_MAX_DIFFICULTY, round(self.max_difficulty - 0.1, 2))
         self.min_difficulty = max(MIN_DIFFICULTY_FLOOR_COLLAPSE, round(self.min_difficulty - 0.1, 2))
