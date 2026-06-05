@@ -3,13 +3,9 @@ from loguru import logger
 from src.phase0_probe.difficulty_mapper import DifficultyMapper
 from .accuracy_tracker import AccuracyTracker
 
-# Hard ceiling – never go above this
 MAX_DIFFICULTY_CEILING = 0.85
-# Floor cap for expansion – never push floor above this
 MAX_DIFFICULTY_FLOOR_EXPAND = 0.70
-# Hard floor for collapse – never go below this during collapse
 MIN_DIFFICULTY_FLOOR_COLLAPSE = 0.35
-# Minimum max difficulty after collapse (prevents going too easy)
 MIN_MAX_DIFFICULTY = 0.45
 
 class CurriculumEngine:
@@ -57,7 +53,6 @@ class CurriculumEngine:
     def sample_question(self) -> dict:
         pool = self.get_active_pool()
         if not pool:
-            logger.warning("Active pool empty → fallback to full map")
             if self.mapper.difficulty_map:
                 q_id = random.choice(list(self.mapper.difficulty_map.keys()))
                 return {"id": q_id, **self.mapper.difficulty_map[q_id]}
@@ -80,19 +75,14 @@ class CurriculumEngine:
         return self.sample_batch(batch_size=batch_size)
 
     def expand_range_temporarily(self):
-        """Expand difficulty bounds when active pool is empty.
-        Now respects the global floor MIN_DIFFICULTY_FLOOR_COLLAPSE (0.35).
-        """
         self.min_difficulty = max(MIN_DIFFICULTY_FLOOR_COLLAPSE, round(self.min_difficulty - 0.1, 2))
         self.max_difficulty = min(MAX_DIFFICULTY_CEILING, round(self.max_difficulty + 0.1, 2))
         logger.info(f"Temp expansion: [{self.min_difficulty}, {self.max_difficulty}]")
 
     def collapse_temporarily(self):
-        """Step back difficulty bounds if model is failing."""
-        old_min, old_max = self.min_difficulty, self.max_difficulty
-        self.max_difficulty = max(MIN_MAX_DIFFICULTY, round(self.max_difficulty - 0.1, 2))
-        self.min_difficulty = max(MIN_DIFFICULTY_FLOOR_COLLAPSE, round(self.min_difficulty - 0.1, 2))
-        logger.warning(f"Collapsed range: [{old_min:.2f},{old_max:.2f}] → [{self.min_difficulty:.2f},{self.max_difficulty:.2f}]")
+        # Disabled – no collapse
+        logger.info("Collapse disabled – keeping current range.")
+        pass
 
     def update_accuracy(self, *args, **kwargs):
         is_correct = kwargs.get("is_correct", None)
