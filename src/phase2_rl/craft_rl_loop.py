@@ -95,14 +95,12 @@ def compute_grpo_loss(policy_model, ref_model, tokenizer, prompt_ids, generated_
     if reward_std > 0.01:
         advantages = centered / (reward_std + 1e-8)
     else:
-        advantages = centered   # all near zero → loss near zero
+        advantages = centered
 
-    # Policy forward pass (gradients)
     policy_model.train()
     outputs = policy_model(generated_ids)
-    logits = outputs.logits   # [group, seq_len, vocab]
+    logits = outputs.logits
 
-    # Shift: logits[t-1] predicts token[t]
     shift_logits = logits[:, prompt_len-1:-1, :]
     shift_labels = generated_ids[:, prompt_len:]
 
@@ -114,7 +112,6 @@ def compute_grpo_loss(policy_model, ref_model, tokenizer, prompt_ids, generated_
 
     grpo_loss = -(advantages.to(seq_log_probs.device) * seq_log_probs).mean()
 
-    # Reference forward (no grad)
     with torch.no_grad():
         ref_outputs = ref_model(generated_ids)
         ref_logits = ref_outputs.logits
@@ -141,7 +138,7 @@ def generate_group_responses(policy_model, tokenizer, prompt_text, group_size, m
         generated = policy_model.generate(
             batched_ids, attention_mask=batched_mask,
             max_new_tokens=max_new_tokens, do_sample=True, temperature=temperature,
-            repetition_penalty=1.1,  # prevents repetition loops
+            repetition_penalty=1.1,
             pad_token_id=tokenizer.pad_token_id, eos_token_id=tokenizer.eos_token_id,
             return_dict_in_generate=False
         )
@@ -154,18 +151,9 @@ def generate_group_responses(policy_model, tokenizer, prompt_text, group_size, m
 
 
 def format_prompt(question_data, tokenizer):
-    """
-    Format prompt to EXACTLY match Phase 1 SFT training.
-    The model was trained to output:
-        Step 1: ...
-        Step 2: ...
-        Final Answer: X
-    No XML tags.
-    """
     question_text = question_data.get("question", question_data.get("problem", ""))
     dataset = question_data.get("dataset", "gsm8k")
     
-    # Use the SFT system prompt (what the model actually learned)
     if dataset == "strategyqa":
         system = (
             "You are a reasoning assistant. Answer the yes/no question step by step. "
@@ -185,7 +173,6 @@ def format_prompt(question_data, tokenizer):
             "'Step 1:', 'Step 2:', etc. You MUST end your response with 'Final Answer: A' (or B, C, D, E)."
         )
     else:
-        # GSM8K / math problems (including aqua fallback)
         system = (
             "You are a reasoning assistant. Solve the math problem step by step. "
             "You MUST format your explanation as a sequence of steps starting with "
@@ -214,7 +201,7 @@ def train_rl(config_name, hardware, output_dir, resume=False):
     if hardware == "kaggle":
         GROUP_SIZE = 4
         MAX_NEW_TOKENS = 256
-        TEMPERATURE = 0.8
+        TEMPERATURE = 0.9   # increased for diversity
         SAVE_EVERY = 50
         TOTAL_STEPS = 500
     else:
@@ -230,10 +217,10 @@ def train_rl(config_name, hardware, output_dir, resume=False):
     difficulty_mapper = DifficultyMapper()
     difficulty_mapper.load_map("data/difficulty_map.json")
     curriculum = CurriculumEngine(difficulty_mapper=difficulty_mapper, initial_range=(0.4, 0.7))
-    kl_controller = KLController(initial_beta=0.04, target_kl=0.1, warmup_steps=20, adjustment_factor=0.05)
+    kl_controller = KLController(initial_beta=0.04, target_kl=0.1, warmup_steps=20, adjustment_factor=0.02, beta_max=0.2)
     reward_scorer = RewardScorer()
 
-    # Multi-dataset sampler (used after step 200)
+    # Multi-dataset sampler used from step 1
     multi_sampler = MultiDatasetSampler(gsm8k_weight=0.4, strategyqa_weight=0.25, mmlu_weight=0.20, aqua_weight=0.15,
                                         n_preload=500, difficulty_mapper=difficulty_mapper, curriculum=curriculum)
 
@@ -259,38 +246,22 @@ def train_rl(config_name, hardware, output_dir, resume=False):
             logger.info(f"Resuming from step {latest['step']}")
             start_step = latest["step"] + 1
             checkpoint_mgr.load_optimizer_state(optimizer, latest["step"])
-            # Restore curriculum and KL state from metadata if saved (optional)
     else:
         kl_controller.reset()
 
-    # Component B
-    # Note: trace_generator is unused (deprecated) – kept for compatibility, not called
     contrastive_builder = ContrastiveBuilder()
     dpo_trainer = StepDPOTrainer()
-    COMPONENT_B_START_STEP = 100
-
-    MULTI_DATASET_START_STEP = max(start_step, 200)
-    logger.info(f"Multi-dataset sampling starts at step {MULTI_DATASET_START_STEP}")
+    COMPONENT_B_START_STEP = 50   # start DPO earlier
 
     logger.info(f"Training from step {start_step} to {TOTAL_STEPS}")
     step = start_step
     
-    # Consecutive zero-success counter (prevents over-collapse)
-    zero_success_counter = 0
+    # tracking for manual expansion if stuck
+    low_accuracy_counter = 0
     
     while step <= TOTAL_STEPS:
-        # ----- Question sampling -----
-        if step < MULTI_DATASET_START_STEP:
-            batch = curriculum.get_next_batch(batch_size=1)
-            if not batch:
-                curriculum.expand_range_temporarily()
-                batch = curriculum.get_next_batch(batch_size=1)
-            question_data = batch[0] if batch else None
-        else:
-            question_data = multi_sampler.sample_one()
-            if question_data is None:
-                batch = curriculum.get_next_batch(batch_size=1)
-                question_data = batch[0] if batch else None
+        # Always sample from multi-dataset (fresh questions)
+        question_data = multi_sampler.sample_one()
         if question_data is None:
             logger.warning(f"Step {step}: No question available. Skipping.")
             step += 1
@@ -298,12 +269,10 @@ def train_rl(config_name, hardware, output_dir, resume=False):
 
         prompt_text = format_prompt(question_data, tokenizer)
 
-        # ----- Generation -----
         prompt_ids, generated_ids, responses = generate_group_responses(
             policy_model, tokenizer, prompt_text, GROUP_SIZE, MAX_NEW_TOKENS, TEMPERATURE, device
         )
 
-        # ----- Reward scoring -----
         rewards = []
         successes = []
         for resp in responses:
@@ -313,22 +282,17 @@ def train_rl(config_name, hardware, output_dir, resume=False):
         mean_reward = sum(rewards) / len(rewards)
         mean_success = sum(successes) / len(successes)
 
-        # ----- GRPO + KL loss -----
         policy_model.train()
         optimizer.zero_grad()
         total_loss, grpo_loss_val, kl_loss_val, adv_list = compute_grpo_loss(
             policy_model, ref_model, tokenizer, prompt_ids, generated_ids, rewards, kl_controller.get_beta()
         )
 
-        # ----- Component B (DPO) -----
         dpo_loss_val = 0.0
-        component_b_active = False
         if step >= COMPONENT_B_START_STEP:
-            component_b_active = True
             try:
                 pairs = contrastive_builder.build_pairs(question_data, responses, rewards)
                 if pairs:
-                    # Limit to 2 pairs to save memory
                     import random
                     pairs = random.sample(pairs, min(2, len(pairs)))
                     dpo_loss = dpo_trainer.compute_loss(policy_model, ref_model, tokenizer, pairs,
@@ -338,7 +302,6 @@ def train_rl(config_name, hardware, output_dir, resume=False):
             except Exception as e:
                 logger.warning(f"Component B error: {e}")
 
-        # ----- Backward & Optimizer -----
         if total_loss.requires_grad:
             total_loss.backward()
             torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
@@ -346,21 +309,26 @@ def train_rl(config_name, hardware, output_dir, resume=False):
         else:
             logger.warning(f"Step {step}: loss has no grad, skipping update")
 
-        # ----- Update curriculum & KL (use kl_loss_val before deletion) -----
+        # Update curriculum (only expand, no collapse)
         curriculum.update_accuracy(question_id=question_data.get("id", ""), is_correct=(mean_success > 0))
         
-        # Collapse only if zero success for 3 consecutive steps AND it's a GSM8K question
-        if mean_success == 0.0 and step > 50 and question_data.get("dataset", "gsm8k") == "gsm8k":
-            zero_success_counter += 1
-            if zero_success_counter >= 3:
-                curriculum.collapse_temporarily()
-                zero_success_counter = 0
+        # Manual expansion safeguard: if accuracy < 0.5 for 100 steps, expand manually
+        if mean_success < 0.5:
+            low_accuracy_counter += 1
         else:
-            zero_success_counter = 0
+            low_accuracy_counter = 0
+        
+        if low_accuracy_counter >= 100:
+            # manually expand range
+            old_min, old_max = curriculum.current_range
+            new_min = max(0.4, old_min - 0.05)
+            new_max = min(0.85, old_max + 0.05)
+            curriculum.current_range = [new_min, new_max]
+            logger.info(f"Manual expansion due to low accuracy: [{old_min:.2f},{old_max:.2f}] -> [{new_min:.2f},{new_max:.2f}]")
+            low_accuracy_counter = 0
 
-        current_beta = kl_controller.step(kl_loss_val)   # kl_loss_val still alive
+        current_beta = kl_controller.step(kl_loss_val)
 
-        # ----- Logging (still needs kl_loss_val) -----
         if step % 5 == 0:
             logger.info(
                 f"[Step {step}] mean_reward={mean_reward:.4f}, mean_success={mean_success:.4f}, "
@@ -368,7 +336,6 @@ def train_rl(config_name, hardware, output_dir, resume=False):
                 f"dpo={dpo_loss_val:.4f}, curr=[{curriculum.current_range[0]:.2f},{curriculum.current_range[1]:.2f}]"
             )
 
-        # ----- Checkpoint -----
         if step % SAVE_EVERY == 0:
             checkpoint_mgr.save(policy_model, tokenizer, step, metadata={
                 "step": step,
@@ -378,11 +345,9 @@ def train_rl(config_name, hardware, output_dir, resume=False):
             })
             logger.info(f"Checkpoint saved at step {step}")
 
-        # ----- Cleanup memory (now safe to delete tensors and loss values) -----
         del prompt_ids, generated_ids, responses, rewards
         del total_loss, grpo_loss_val, kl_loss_val
 
-        # ----- Periodic memory flush -----
         if step % 50 == 0:
             import gc
             gc.collect()
@@ -391,7 +356,6 @@ def train_rl(config_name, hardware, output_dir, resume=False):
 
         step += 1
 
-    # Final save
     final_path = os.path.join(output_dir, "final")
     policy_model.save_pretrained(final_path)
     tokenizer.save_pretrained(final_path)
