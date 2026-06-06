@@ -156,15 +156,15 @@ class BenchmarkEvaluator:
         except Exception:
             return f"{system}\n\nProblem: {question}\n\nSolve step by step:"
 
-    # ─── ANSWER EXTRACTION (Fixed order for baseline) ─────────────────────
+    # ─── ANSWER EXTRACTION (No dataset-specific mapping; returns raw string) ──
 
     def extract_model_answer(self, response_text: str) -> str:
         """
-        Extract final answer from model output.
+        Extract final answer from model output as a raw string.
         Prioritises 'Final Answer:' exactly as trained, then bare patterns,
         then semantic answers (yes/no or letter) anywhere, and only last number
-        as a last resort. This ensures baseline models without formatting
-        are evaluated correctly.
+        as a last resort. Does NOT perform dataset-specific mapping (e.g., 1→A).
+        That mapping is done later in evaluate_checkpoint based on dataset.
         """
         if not response_text:
             return ""
@@ -216,18 +216,12 @@ class BenchmarkEvaluator:
         if yn2:
             return yn2.group(1).lower()
 
-        # Priority 5: single letter A-D anywhere (for MMLU baseline)
+        # Priority 5: single letter A-D anywhere (for MMLU baseline with letter output)
         let = re.search(r'\b([A-D])\b', text)
         if let:
             return let.group(1).upper()
 
-        # Priority 6: single digit 1-4 -> map to letter (for baseline MMLU numeric output)
-        digit_map = {"1": "A", "2": "B", "3": "C", "4": "D"}
-        single_digit = re.search(r'\b([1-4])\b', text)
-        if single_digit:
-            return digit_map[single_digit.group(1)]
-
-        # Priority 7: last number anywhere (fallback for GSM8K)
+        # Priority 6: last number anywhere (fallback for GSM8K and numeric baselines)
         nums = re.findall(r'([+\-]?\d[\d,]*(?:\.\d+)?)', text)
         if nums:
             return nums[-1].replace(',', '')
@@ -392,27 +386,29 @@ class BenchmarkEvaluator:
             else:
                 response = f"Step 1: compute.\nFinal Answer: {ground_truth}"
 
-            predicted = self.extract_model_answer(response)
+            # Extract raw answer (no dataset-specific mapping yet)
+            predicted_raw = self.extract_model_answer(response)
 
-            # --- POST-PROCESS PREDICTED ANSWER BASED ON DATASET ---
-            # Fix baseline numeric outputs for MMLU and StrategyQA
+            # --- DATASET-SPECIFIC POST-PROCESSING (fixes baseline numeric outputs) ---
+            predicted = predicted_raw
             if dataset_name == "mmlu":
-                # Map "1" -> "A", "2" -> "B", "3" -> "C", "4" -> "D"
+                # Map single digit 1-4 to letter
                 digit_to_letter = {"1": "A", "2": "B", "3": "C", "4": "D"}
                 if predicted in digit_to_letter:
                     predicted = digit_to_letter[predicted]
-                # Also handle "0" to "A"? No, MMLU answers are 1-4 based.
+                # Also map "0" -> "A"? No, MMLU answers are 1-4 based.
             elif dataset_name == "strategyqa":
                 # Map "1" -> "yes", "0" -> "no"
                 if predicted == "1":
                     predicted = "yes"
                 elif predicted == "0":
                     predicted = "no"
-                # Also map "true"/"false" if present
+                # Map boolean strings
                 elif predicted.lower() == "true":
                     predicted = "yes"
                 elif predicted.lower() == "false":
                     predicted = "no"
+            # GSM8K: no mapping needed
 
             is_correct = self.answers_match(predicted, ground_truth)
 
