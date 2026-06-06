@@ -1,5 +1,6 @@
 """
 report_generator.py — Generates benchmark report from REAL evaluation JSONs.
+Now accepts an arbitrary number of checkpoint files (--ckpt-<step>-json).
 All numbers come from actual evaluator.py output. Nothing hardcoded.
 """
 
@@ -43,14 +44,12 @@ class ReportGenerator:
         baseline_json: str,
         champion_json: str,
         champion_label: str,
-        ckpt150_json: str = None,
-        ckpt200_json: str = None,
-        ckpt250_json: str = None,
+        extra_checkpoints: dict,  # {step: json_path}
         report_md_path: str = "craft_output/benchmark_report.md",
     ):
         """
         Generate the full benchmark report from real evaluation JSONs.
-        All numbers come from actual evaluator runs.
+        extra_checkpoints: dictionary mapping step numbers to their result JSON paths.
         """
         logger.info("Generating benchmark report from real evaluation data...")
 
@@ -60,7 +59,7 @@ class ReportGenerator:
 
         # Samsung's required minimum scores
         SAMSUNG_MIN = {"gsm8k": 0.50, "strategyqa": 0.65, "mmlu": 0.45}
-        SAMSUNG_DELTA_MIN = 0.05  # +5% minimum improvement
+        SAMSUNG_DELTA_MIN = 0.05
 
         # ── Build comparison rows ──────────────────────────────────────────
         rows = []
@@ -87,41 +86,35 @@ class ReportGenerator:
 
         avg_delta = sum(r["delta"] for r in rows) / len(rows)
 
-        # ── Build checkpoint sweep table if available ──────────────────────
+        # ── Build checkpoint sweep table from extra_checkpoints ────────────
         sweep_section = ""
-        sweep_data = {}
-        if ckpt150_json:
-            sweep_data["checkpoint-150"] = self._load_json(ckpt150_json)
-        if ckpt200_json:
-            sweep_data["checkpoint-200"] = self._load_json(ckpt200_json)
-        if ckpt250_json:
-            sweep_data["checkpoint-250"] = self._load_json(ckpt250_json)
-
-        if sweep_data:
+        if extra_checkpoints:
             sweep_section = "\n## 3. Checkpoint Sweep — Full Comparison\n\n"
             sweep_section += "All checkpoints evaluated in identical conditions (4-bit, HF, greedy decoding).\n\n"
             sweep_section += "| Checkpoint | GSM8K Acc | StrategyQA Acc | MMLU Acc | Avg Improvement | Status |\n"
             sweep_section += "|---|---|---|---|---|---|\n"
-            for ck_label, ck_data in sweep_data.items():
+            for step in sorted(extra_checkpoints.keys()):
+                ck_data = self._load_json(extra_checkpoints[step])
                 ck_gsm = self._get_acc(ck_data, "gsm8k")
                 ck_strat = self._get_acc(ck_data, "strategyqa")
                 ck_mmlu = self._get_acc(ck_data, "mmlu")
-                b_gsm = self._get_acc(baseline, "gsm8k")
-                b_strat = self._get_acc(baseline, "strategyqa")
-                b_mmlu = self._get_acc(baseline, "mmlu")
+                b_gsm = rows[0]["baseline"]
+                b_strat = rows[1]["baseline"]
+                b_mmlu = rows[2]["baseline"]
                 avg_imp = ((ck_gsm - b_gsm) + (ck_strat - b_strat) + (ck_mmlu - b_mmlu)) / 3
-                is_champion = ck_label == champion_label
+                # Determine if this checkpoint is the champion
+                is_champion = (step == int(champion_label.split("-")[-1]))
                 crown = " 👑 CHAMPION" if is_champion else ""
-                
+
                 # Check Samsung targets
                 passes_gsm = ck_gsm >= 0.50 and (ck_gsm - b_gsm) >= 0.05
                 passes_strat = ck_strat >= 0.65 and (ck_strat - b_strat) >= 0.05
                 passes_mmlu = ck_mmlu >= 0.45 and (ck_mmlu - b_mmlu) >= 0.05
                 passes_count = sum([passes_gsm, passes_strat, passes_mmlu])
                 status = "✅ PASS" if passes_count >= 2 else "⚠️"
-                
+
                 sweep_section += (
-                    f"| {ck_label}{crown} | {ck_gsm:.1%} | {ck_strat:.1%} | {ck_mmlu:.1%} | "
+                    f"| checkpoint-{step}{crown} | {ck_gsm:.1%} | {ck_strat:.1%} | {ck_mmlu:.1%} | "
                     f"+{avg_imp:.1%} | {status} |\n"
                 )
 
@@ -168,10 +161,6 @@ failure modes of RL applied to SLMs:
 | Phi-3-Mini (Baseline) | {rows[0]['baseline']:.1%} | {rows[0]['baseline_fmt']:.1%} | {rows[0]['baseline_steps']:.1f} | — |
 | **CRAFT {champion_label}** | **{rows[0]['champion']:.1%}** | **{rows[0]['champion_fmt']:.1%}** | **{rows[0]['champion_steps']:.1f}** | **{rows[0]['delta']:+.1%}** |
 
-```
-Baseline: [{self._bar(rows[0]['baseline'])}] {rows[0]['baseline']:.1%}
-CRAFT:    [{self._bar(rows[0]['champion'])}] {rows[0]['champion']:.1%}
-```
 
 ### StrategyQA (Logical Multi-Step Inference)
 | Model | Accuracy | Format Compliance | Avg Steps | Δ vs Baseline |
@@ -179,10 +168,6 @@ CRAFT:    [{self._bar(rows[0]['champion'])}] {rows[0]['champion']:.1%}
 | Phi-3-Mini (Baseline) | {rows[1]['baseline']:.1%} | {rows[1]['baseline_fmt']:.1%} | {rows[1]['baseline_steps']:.1f} | — |
 | **CRAFT {champion_label}** | **{rows[1]['champion']:.1%}** | **{rows[1]['champion_fmt']:.1%}** | **{rows[1]['champion_steps']:.1f}** | **{rows[1]['delta']:+.1%}** |
 
-```
-Baseline: [{self._bar(rows[1]['baseline'])}] {rows[1]['baseline']:.1%}
-CRAFT:    [{self._bar(rows[1]['champion'])}] {rows[1]['champion']:.1%}
-```
 
 ### MMLU (Multi-Choice Knowledge)
 | Model | Accuracy | Format Compliance | Avg Steps | Δ vs Baseline |
@@ -190,10 +175,6 @@ CRAFT:    [{self._bar(rows[1]['champion'])}] {rows[1]['champion']:.1%}
 | Phi-3-Mini (Baseline) | {rows[2]['baseline']:.1%} | {rows[2]['baseline_fmt']:.1%} | {rows[2]['baseline_steps']:.1f} | — |
 | **CRAFT {champion_label}** | **{rows[2]['champion']:.1%}** | **{rows[2]['champion_fmt']:.1%}** | **{rows[2]['champion_steps']:.1f}** | **{rows[2]['delta']:+.1%}** |
 
-```
-Baseline: [{self._bar(rows[2]['baseline'])}] {rows[2]['baseline']:.1%}
-CRAFT:    [{self._bar(rows[2]['champion'])}] {rows[2]['champion']:.1%}
-```
 
 **Average improvement across all three benchmarks: {avg_delta:+.1%}**
 
@@ -217,7 +198,7 @@ CRAFT:    [{self._bar(rows[2]['champion'])}] {rows[2]['champion']:.1%}
 - **StrategyQA**: Test split ({rows[1].get('sample_count', 100)} samples evaluated)
 - **MMLU**: Test split ({rows[2].get('sample_count', 100)} samples evaluated)
 - **Decoding**: Greedy (temperature=0, do_sample=False) for reproducibility
-- **Answer extraction**: `<answer>` XML tags (primary), "Final Answer:" pattern (fallback), last number (last resort)
+- **Answer extraction**: "Final Answer:" pattern (primary), last number (fallback)
 - **Scoring**: Exact match with numeric tolerance (|predicted - truth| < 0.01)
 - **All comparisons**: Same 4-bit quantization applied to both baseline and CRAFT for fair measurement
 """
@@ -232,6 +213,7 @@ CRAFT:    [{self._bar(rows[2]['champion'])}] {rows[2]['champion']:.1%}
             baseline_json=results_path,
             champion_json=results_path,
             champion_label="CRAFT",
+            extra_checkpoints={},
             report_md_path=report_md_path,
         )
 
@@ -241,20 +223,33 @@ def main():
     parser.add_argument("--baseline-json", required=True)
     parser.add_argument("--champion-json", required=True)
     parser.add_argument("--champion-label", default="checkpoint-200")
-    parser.add_argument("--ckpt150-json", default=None)
-    parser.add_argument("--ckpt200-json", default=None)
-    parser.add_argument("--ckpt250-json", default=None)
     parser.add_argument("--report-md", default="craft_output/benchmark_report.md")
-    args = parser.parse_args()
+    # Parse known args; collect remaining as --ckpt-XXX-json
+    args, unknown = parser.parse_known_args()
+
+    extra_checkpoints = {}
+    for i in range(0, len(unknown), 2):
+        if i + 1 >= len(unknown):
+            break
+        key = unknown[i]
+        value = unknown[i + 1]
+        if key.startswith("--ckpt-") and key.endswith("-json"):
+            # Extract step number from e.g. --ckpt-150-json
+            step_str = key[6:-5]  # remove '--ckpt-' and '-json'
+            if step_str.isdigit():
+                step = int(step_str)
+                extra_checkpoints[step] = value
+            else:
+                logger.warning(f"Skipping unrecognised argument: {key}")
+        else:
+            logger.warning(f"Skipping unexpected argument: {key}")
 
     gen = ReportGenerator()
     gen.generate_full_report(
         baseline_json=args.baseline_json,
         champion_json=args.champion_json,
         champion_label=args.champion_label,
-        ckpt150_json=args.ckpt150_json,
-        ckpt200_json=args.ckpt200_json,
-        ckpt250_json=args.ckpt250_json,
+        extra_checkpoints=extra_checkpoints,
         report_md_path=args.report_md,
     )
 
