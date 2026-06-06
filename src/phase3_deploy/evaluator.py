@@ -156,12 +156,15 @@ class BenchmarkEvaluator:
         except Exception:
             return f"{system}\n\nProblem: {question}\n\nSolve step by step:"
 
-    # ─── ANSWER EXTRACTION (Prioritizes "Final Answer:") ─────────────────────
+    # ─── ANSWER EXTRACTION (Fixed order for baseline) ─────────────────────
 
     def extract_model_answer(self, response_text: str) -> str:
         """
         Extract final answer from model output.
-        Prioritises 'Final Answer:' exactly as trained.
+        Prioritises 'Final Answer:' exactly as trained, then bare patterns,
+        then semantic answers (yes/no or letter) anywhere, and only last number
+        as a last resort. This ensures baseline models without formatting
+        are evaluated correctly.
         """
         if not response_text:
             return ""
@@ -193,7 +196,7 @@ class BenchmarkEvaluator:
         if bare_letter:
             return bare_letter.group(1).upper()
 
-        # Priority 3: <answer> tags (only for backward compatibility, not used)
+        # Priority 3: <answer> tags (backward compatibility)
         xml = re.search(r'<answer>\s*([\s\S]*?)\s*</answer>', text, re.IGNORECASE)
         if xml:
             content = xml.group(1).strip().replace(',', '')
@@ -208,18 +211,27 @@ class BenchmarkEvaluator:
                 return letter.group(1).upper()
             return content
 
-        # Priority 4: last number anywhere
-        nums = re.findall(r'([+\-]?\d[\d,]*(?:\.\d+)?)', text)
-        if nums:
-            return nums[-1].replace(',', '')
-        # Priority 5: yes/no anywhere
+        # Priority 4: yes/no anywhere (before numbers)
         yn2 = re.search(r'\b(yes|no)\b', text, re.IGNORECASE)
         if yn2:
             return yn2.group(1).lower()
-        # Priority 6: single letter
+
+        # Priority 5: single letter A-D anywhere (for MMLU baseline)
         let = re.search(r'\b([A-D])\b', text)
         if let:
             return let.group(1).upper()
+
+        # Priority 6: single digit 1-4 -> map to letter (for baseline MMLU numeric output)
+        digit_map = {"1": "A", "2": "B", "3": "C", "4": "D"}
+        single_digit = re.search(r'\b([1-4])\b', text)
+        if single_digit:
+            return digit_map[single_digit.group(1)]
+
+        # Priority 7: last number anywhere (fallback for GSM8K)
+        nums = re.findall(r'([+\-]?\d[\d,]*(?:\.\d+)?)', text)
+        if nums:
+            return nums[-1].replace(',', '')
+
         return ""
 
     def answers_match(self, predicted: str, ground_truth: str) -> bool:
@@ -381,6 +393,27 @@ class BenchmarkEvaluator:
                 response = f"Step 1: compute.\nFinal Answer: {ground_truth}"
 
             predicted = self.extract_model_answer(response)
+
+            # --- POST-PROCESS PREDICTED ANSWER BASED ON DATASET ---
+            # Fix baseline numeric outputs for MMLU and StrategyQA
+            if dataset_name == "mmlu":
+                # Map "1" -> "A", "2" -> "B", "3" -> "C", "4" -> "D"
+                digit_to_letter = {"1": "A", "2": "B", "3": "C", "4": "D"}
+                if predicted in digit_to_letter:
+                    predicted = digit_to_letter[predicted]
+                # Also handle "0" to "A"? No, MMLU answers are 1-4 based.
+            elif dataset_name == "strategyqa":
+                # Map "1" -> "yes", "0" -> "no"
+                if predicted == "1":
+                    predicted = "yes"
+                elif predicted == "0":
+                    predicted = "no"
+                # Also map "true"/"false" if present
+                elif predicted.lower() == "true":
+                    predicted = "yes"
+                elif predicted.lower() == "false":
+                    predicted = "no"
+
             is_correct = self.answers_match(predicted, ground_truth)
 
             # Format compliance: must have steps and final answer
