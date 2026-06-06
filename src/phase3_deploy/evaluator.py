@@ -389,6 +389,15 @@ class BenchmarkEvaluator:
             # Extract raw answer (no dataset-specific mapping yet)
             predicted_raw = self.extract_model_answer(response)
 
+            # --- FIX for GSM8K: if extraction returned "yes"/"no", it's a stray word from reasoning.
+            # Re-extract using only number-finding logic (last number in response).
+            if dataset_name == "gsm8k" and predicted_raw.lower() in ("yes", "no"):
+                nums = re.findall(r'([+\-]?\d[\d,]*(?:\.\d+)?)', response)
+                if nums:
+                    predicted_raw = nums[-1].replace(',', '')
+                else:
+                    predicted_raw = ""
+
             # --- DATASET-SPECIFIC POST-PROCESSING (fixes baseline numeric outputs) ---
             predicted = predicted_raw
             if dataset_name == "mmlu":
@@ -396,7 +405,6 @@ class BenchmarkEvaluator:
                 digit_to_letter = {"1": "A", "2": "B", "3": "C", "4": "D"}
                 if predicted in digit_to_letter:
                     predicted = digit_to_letter[predicted]
-                # Also map "0" -> "A"? No, MMLU answers are 1-4 based.
             elif dataset_name == "strategyqa":
                 # Map "1" -> "yes", "0" -> "no"
                 if predicted == "1":
