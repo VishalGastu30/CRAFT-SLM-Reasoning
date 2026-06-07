@@ -182,8 +182,8 @@ class BenchmarkEvaluator:
             yn = re.search(r'\b(yes|no)\b', ans, re.IGNORECASE)
             if yn:
                 return yn.group(1).lower()
-            # Extract letter (A, B, C, D)
-            letter = re.search(r'\b([A-D])\b', ans)
+            # Extract letter (A, B, C, D) – case-insensitive
+            letter = re.search(r'\b([A-Da-d])\b', ans)
             if letter:
                 return letter.group(1).upper()
             return ans
@@ -192,7 +192,7 @@ class BenchmarkEvaluator:
         bare_yesno = re.match(r'^\s*(yes|no)[\.\!\?]?\s*$', text, re.IGNORECASE)
         if bare_yesno:
             return bare_yesno.group(1).lower()
-        bare_letter = re.match(r'^\s*([A-D])[\.\!\?]?\s*$', text)
+        bare_letter = re.match(r'^\s*([A-Da-d])[\.\!\?]?\s*$', text)
         if bare_letter:
             return bare_letter.group(1).upper()
 
@@ -206,7 +206,7 @@ class BenchmarkEvaluator:
             yn = re.search(r'\b(yes|no)\b', content, re.IGNORECASE)
             if yn:
                 return yn.group(1).lower()
-            letter = re.search(r'^([A-D])\.?$', content.strip())
+            letter = re.search(r'^([A-Da-d])\.?$', content.strip())
             if letter:
                 return letter.group(1).upper()
             return content
@@ -216,8 +216,8 @@ class BenchmarkEvaluator:
         if yn2:
             return yn2.group(1).lower()
 
-        # Priority 5: single letter A-D anywhere (for MMLU baseline with letter output)
-        let = re.search(r'\b([A-D])\b', text)
+        # Priority 5: single letter A-D anywhere (case-insensitive) – fixes baseline MMLU extraction
+        let = re.search(r'\b([A-Da-d])\b', text)
         if let:
             return let.group(1).upper()
 
