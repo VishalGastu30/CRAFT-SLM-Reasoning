@@ -8,6 +8,8 @@
 - **Final Presentation Google Drive Link** - *[Pending upload during Week 4]*
 - **Full Submission Demo Video Link** - *[Pending upload during Week 4]*
 - **Setup & Result Reproducibility Video Link** - *[Pending upload during Week 4]*
+- **Models Used** - [Microsoft Phi-3-Mini-4k-Instruct](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct), [Qwen-2.5-7B](https://huggingface.co/Qwen/Qwen2.5-7B)
+- **Models Published** - [OmnipotentFool/Aurvion](https://huggingface.co/OmnipotentFool/Aurvion)
 
 ---
 
@@ -127,8 +129,6 @@ This starts the local FastAPI server. Open the Web Dashboard by visiting `craft_
 
 - **Technical Documentation** - Located in the [`docs/`](docs/) directory. (See Technical Documentation Guide above)
 - **Source Code** - Located in the [`src/`](src/) directory.
-- **Models Used** - [Microsoft Phi-3-Mini-4k-Instruct](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct) & Qwen-2.5-7B (Base & SFT)
-- **Models Published** - *[Pending upload to HuggingFace under Aurvion/CRAFT-Phi3-Mini]*
 - **Datasets Used** - [GSM8K](https://huggingface.co/datasets/gsm8k), [AQuA-RAT](https://huggingface.co/datasets/aqua_rat), [StrategyQA](https://huggingface.co/datasets/wza/strategyqa), [MMLU](https://huggingface.co/datasets/cais/mmlu)
 
 ---
