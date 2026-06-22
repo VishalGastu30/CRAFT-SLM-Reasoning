@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRAFT — Reasoning Assistant</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <span class="logo-icon">⚡</span>
+                <span class="logo-text">CRAFT</span>
+            </div>
+            <div class="model-info">
+                <span class="status-dot active"></span>
+                <span class="model-name">Phi-3-Mini</span>
+                <span class="model-badge">GGUF</span>
+            </div>
+            <div class="sidebar-actions">
+                <button class="btn-new-chat" onclick="resetChat()">
+                    <span>+</span> New Chat
+                </button>
+            </div>
+            <div class="sidebar-footer">
+                <div class="stats">
+                    <span id="latency-display">0ms</span>
+                    <span id="mode-display">Mock Mode</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-container">
+            <header class="chat-header">
+                <h1>CRAFT Reasoning Assistant</h1>
+                <div class="header-actions">
+                    <label class="toggle-label">
+                        <span>Mock Mode</span>
+                        <input type="checkbox" id="mock-toggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <select id="temp-select">
+                        <option value="0.2">0.2 (Focused)</option>
+                        <option value="0.5">0.5 (Balanced)</option>
+                        <option value="0.8" selected>0.8 (Creative)</option>
+                        <option value="1.2">1.2 (Exploratory)</option>
+                    </select>
+                </div>
+            </header>
+
+            <!-- Messages Area -->
+            <div class="messages-area" id="messages-area">
+                <div class="welcome-message">
+                    <div class="welcome-icon">🤖</div>
+                    <h2>Welcome to CRAFT</h2>
+                    <p>Ask me any reasoning or math question, and I'll provide step-by-step thinking.</p>
+                    <div class="suggestions">
+                        <button class="suggestion-chip" onclick="sendQuestion('What is 15% of 240?')">15% of 240</button>
+                        <button class="suggestion-chip" onclick="sendQuestion('Would a penguin survive in the Sahara desert?')">Penguin in Sahara</button>
+                        <button class="suggestion-chip" onclick="sendQuestion('If a train travels at 60 mph for 2.5 hours, how far does it go?')">Train distance</button>
+                        <button class="suggestion-chip" onclick="sendQuestion('Is a tomato a fruit or a vegetable?')">Tomato classification</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="input-area">
+                <div class="input-wrapper">
+                    <textarea id="question-input" rows="1" placeholder="Ask a reasoning question..." onkeydown="handleKeyDown(event)"></textarea>
+                    <button id="send-btn" onclick="sendMessage()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="input-footer">
+                    <span>Press Enter to send, Shift+Enter for new line</span>
+                    <span id="char-count">0</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="loading-spinner"></div>
+        <span>Thinking...</span>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
