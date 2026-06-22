@@ -6,8 +6,8 @@
 - **Team members (Names)** - G.Vishal, E.Kevin Godfrey
 - **Institute/College Name** - SRM Institute of Science and Technology, Kattankulathur, Chennai - 603203
 - **Final Presentation Google Drive Link** - [https://drive.google.com/file/d/1uG1i7ydhIY5qdk8W0W_jfjacMrjtujzM/view?usp=sharing](https://drive.google.com/file/d/1uG1i7ydhIY5qdk8W0W_jfjacMrjtujzM/view?usp=sharing)
-- **Full Submission Demo Video Link** - *[Pending upload during Week 4]*
-- **Setup & Result Reproducibility Video Link** - *[Pending upload during Week 4]*
+- **Full Submission Demo Video Link** - [https://youtu.be/E09OrWdO9Wk](https://youtu.be/E09OrWdO9Wk)
+- **Setup & Result Reproducibility Video Link** - [https://youtu.be/pMNLqnw3hqs](https://youtu.be/pMNLqnw3hqs)
 - **Models Used** - [Microsoft Phi-3-Mini-4k-Instruct](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct), [Qwen-2.5-7B](https://huggingface.co/Qwen/Qwen2.5-7B)
 - **Models Published** - [OmnipotentFool/Aurvion](https://huggingface.co/OmnipotentFool/Aurvion)
 
