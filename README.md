@@ -1,11 +1,33 @@
 # CRAFT: Curriculum-guided Reinforced Adaptive Fine-Tuning
 
-CRAFT is a framework designed to optimize step-by-step reasoning capabilities in Small Language Models (SLMs). Developed for Samsung EnnovateX 2026, it aligns architectures like Phi-3-Mini (3.8B) and Qwen-2.5-7B on complex mathematical, logical, and multi-domain benchmarks.
+- **Problem Statement Number** - 06
+- **Problem Statement Title** - Enhancing Reasoning in Small Language Models (SLMs) using Reinforcement Learning
+- **Team name** - Aurvion
+- **Team members (Names)** - G.Vishal, E.Kevin Godfrey
+- **Institute/College Name** - SRM Institute of Science and Technology, Kattankulathur, Chennai - 603203
+- **Final Presentation Google Drive Link** - *[Pending upload during Week 4]*
+- **Full Submission Demo Video Link** - *[Pending upload during Week 4]*
+- **Setup & Result Reproducibility Video Link** - *[Pending upload during Week 4]*
 
-CRAFT leverages three core components:
-1. **Component A (Deterministic Rewards):** Structural and execution-level math checkers (using Python AST evaluation) to score reasoning paths with zero critic latency.
-2. **Component B (Step-level Learning):** Deviances in reasoning steps are isolated within candidate groups, allowing direct preference optimization (DPO) targeted specifically to the faulty reasoning step.
-3. **Component C (Live Curriculum):** Filters questions dynamically based on accuracy-driven thresholds, expanding the model's reasoning boundary step by step.
+---
+
+## Project Overview
+
+CRAFT (Curriculum-guided Reinforced Adaptive Fine-Tuning) is an advanced reinforcement learning training framework designed specifically to optimize step-by-step reasoning capabilities in Small Language Models (SLMs) like Microsoft's Phi-3-Mini (3.8B) and Qwen-2.5-7B. SLMs are highly attractive for edge deployment because of their low compute and memory requirements. However, applying RL to them often fails due to three major limitations:
+1. **Sparse/Misaligned Step Rewards**: Outcome-only rewards result in correct answers via flawed reasoning steps.
+2. **Preference Signal Mismatch**: Coarse step comparisons fail to differentiate between alternative reasoning paths.
+3. **KL-Divergence Collapse / Distribution Shift**: Standard RL training destabilizes and collapses quickly under distribution shift.
+
+CRAFT solves these issues through a unified four-phase pipeline: Capability Probing, SFT Warmup, the adaptive CRAFT RL Loop (integrating math step verification, step-level DPO, and a live difficulty curriculum), and GGUF Edge Deployment.
+
+---
+
+## Innovation & Novelty
+
+The novelty of CRAFT lies in three core components:
+1. **Component A: Step-Level Symbolic & NLI Execution Verifier**: Instead of checking only the final answer, CRAFT extracts math expressions and evaluates them using a safe Python interpreter. For logical questions, it runs a local NLI model (`DeBERTa-v3-small`) to score the entailment between successive steps, ensuring the reasoning chain is sound with zero critic latency.
+2. **Component B: Contrastive Step-Level Reinforcement**: We extract step boundaries from reasoning traces and pair correct steps with common errors to compute a step-level DPO preference loss. Deviances in reasoning steps are isolated within candidate groups, allowing direct preference optimization targeted specifically to the faulty reasoning step.
+3. **Component C: Live Adaptive Curriculum**: We track rolling model accuracy. The framework actively samples training questions within the model's current "learning zone" (40-70% difficulty) using a pre-computed capability map, expanding this reasoning boundary dynamically as training stabilizes.
 
 ---
 
@@ -34,6 +56,52 @@ Below is the structured technical documentation for the CRAFT framework:
 
 ---
 
+## System Architecture
+
+```text
+                  ┌──────────────────────────────────────────┐
+                  │      Phase 0: Offline Capability Probe   │
+                  │   - Establishes Question Difficulty Map  │
+                  └────────────────────┬─────────────────────┘
+                                       │
+                                       ▼
+                  ┌──────────────────────────────────────────┐
+                  │        Phase 1: SFT Warmup (QLoRA)       │
+                  │   - Formats traces: "Step 1...", "Step 2"│
+                  └────────────────────┬─────────────────────┘
+                                       │
+                                       ▼
+                  ┌──────────────────────────────────────────┐
+                  │        Phase 2: CRAFT RL Loop (GRPO)      │
+                  │  ┌────────────────────────────────────┐  │
+                  │  │ [Component C] Adaptive Curriculum  │  │
+                  │  └─────────────────┬──────────────────┘  │
+                  │                    ▼                     │
+                  │  ┌────────────────────────────────────┐  │
+                  │  │       Active SLM Model                │  │
+                  │  └─────────────────┬──────────────────┘  │
+                  │                    ▼                     │
+                  │  ┌────────────────────────────────────┐  │
+                  │  │ [Component A] Step Verifiers       │  │
+                  │  │  - Symbolic Math Safe Eval         │  │
+                  │  │  - DeBERTa NLI Logical Entailment │  │
+                  │  └─────────────────┬──────────────────┘  │
+                  │                    ▼                     │
+                  │  ┌────────────────────────────────────┐  │
+                  │  │ [Component B] Step DPO Preference  │  │
+                  │  └────────────────────────────────────┘  │
+                  └────────────────────┬─────────────────────┘
+                                       │
+                                       ▼
+                  ┌──────────────────────────────────────────┐
+                  │      Phase 3: Edge Deployment (GGUF)     │
+                  │   - Llama.cpp Quantization (Q4_K_M)      │
+                  │   - Interactive Desktop UI (FastAPI)     │
+                  └──────────────────────────────────────────┘
+```
+
+---
+
 ## Quick Start Sequence
 
 ### 1. Diagnose Setup suitability
@@ -52,3 +120,20 @@ This executes Phase 0 difficulty mapping, Phase 1 SFT warmup training, Phase 2 R
 python -m craft deploy
 ```
 This starts the local FastAPI server. Open the Web Dashboard by visiting `craft_delivery/src/ui/index.html` in your web browser.
+
+---
+
+## Project Artefacts
+
+- **Technical Documentation** - Located in the [`docs/`](docs/) directory. (See Technical Documentation Guide above)
+- **Source Code** - Located in the [`src/`](src/) directory.
+- **Models Used** - [Microsoft Phi-3-Mini-4k-Instruct](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct) & Qwen-2.5-7B (Base & SFT)
+- **Models Published** - *[Pending upload to HuggingFace under Aurvion/CRAFT-Phi3-Mini]*
+- **Datasets Used** - [GSM8K](https://huggingface.co/datasets/gsm8k), [AQuA-RAT](https://huggingface.co/datasets/aqua_rat), [StrategyQA](https://huggingface.co/datasets/wza/strategyqa), [MMLU](https://huggingface.co/datasets/cais/mmlu)
+
+---
+
+## Attribution
+
+This project utilizes code templates from the [Samsung EnnovateX Phase 2 Solution Template](https://github.com/ennovatex-io/ax-hackathon-2026-full-solution-template).
+All training, curriculum, and RL logic have been custom-developed by Team Aurvion.
