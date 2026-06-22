@@ -128,7 +128,7 @@ This starts the local FastAPI server. Open the Web Dashboard by visiting `craft_
 ## Project Artefacts
 
 - **Technical Documentation** - Located in the [`docs/`](docs/) directory. (See Technical Documentation Guide above)
-- **Source Code** - Located in the [`src/`](src/) directory.
+- **Source Code** - Located in the [`CRAFT-SLM-Reasoning-Framework-Phi3-mini/craft`](CRAFT-SLM-Reasoning-Framework-Phi3-mini/craft) directory for Phi-3-Mini, and the [`CRAFT-SLM-Reasoning-Framework-Qwen25/craft`](CRAFT-SLM-Reasoning-Framework-Qwen25/craft) directory for Qwen-2.5.
 - **Datasets Used** - [GSM8K](https://huggingface.co/datasets/gsm8k), [AQuA-RAT](https://huggingface.co/datasets/aqua_rat), [StrategyQA](https://huggingface.co/datasets/wza/strategyqa), [MMLU](https://huggingface.co/datasets/cais/mmlu)
 
 ---
