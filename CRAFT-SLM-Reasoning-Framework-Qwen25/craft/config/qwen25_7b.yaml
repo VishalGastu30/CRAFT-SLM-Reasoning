@@ -1,0 +1,50 @@
+# Qwen2.5-7B Model Configuration
+model:
+  name: "Qwen/Qwen2.5-7B-Instruct"
+  max_seq_length: 2048
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+sft:
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 2
+  learning_rate: 1e-4
+  epochs: 3
+  lora_rank: 64
+  lora_alpha: 128
+  lora_dropout: 0.05
+  logging_steps: 10
+  save_steps: 50
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  gsm8k_fraction: 0.40
+  aqua_fraction: 0.20
+  strategyqa_fraction: 1.00
+  mmlu_fraction: 0.20
+
+sft_local:
+  per_device_train_batch_size: 8
+  gradient_accumulation_steps: 2
+
+rl:
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 3e-6
+  total_steps: 500
+  group_size: 4
+  max_new_tokens: 512
+  temperature: 0.8
+  kl_beta: 0.04
+  kl_target: 0.1
+  dpo_beta: 0.1
+  dpo_step_activation: 50
+
+rl_local:
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 8

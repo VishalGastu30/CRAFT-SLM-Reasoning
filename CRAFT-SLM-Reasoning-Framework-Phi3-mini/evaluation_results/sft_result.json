@@ -1,0 +1,32 @@
+{
+  "gsm8k": {
+    "checkpoint": "sft",
+    "dataset": "gsm8k",
+    "accuracy": 0.57,
+    "accuracy_pct": 57.0,
+    "format_compliance": 0.98,
+    "avg_steps": 1.82,
+    "correct_count": 57,
+    "sample_count": 100
+  },
+  "strategyqa": {
+    "checkpoint": "sft",
+    "dataset": "strategyqa",
+    "accuracy": 0.72,
+    "accuracy_pct": 72.0,
+    "format_compliance": 1.0,
+    "avg_steps": 3.51,
+    "correct_count": 72,
+    "sample_count": 100
+  },
+  "mmlu": {
+    "checkpoint": "sft",
+    "dataset": "mmlu",
+    "accuracy": 0.61,
+    "accuracy_pct": 61.0,
+    "format_compliance": 0.95,
+    "avg_steps": 2.89,
+    "correct_count": 61,
+    "sample_count": 100
+  }
+}

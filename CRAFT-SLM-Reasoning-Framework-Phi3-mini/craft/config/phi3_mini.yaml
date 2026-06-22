@@ -1,0 +1,33 @@
+# Phi-3-Mini (3.8B) Model Configuration Overrides
+model:
+  name: "microsoft/Phi-3-mini-4k-instruct"
+  max_seq_length: 1024
+  target_modules: 
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_up_proj"
+    - "down_proj"
+
+sft:
+  per_device_train_batch_size: 2          # Kaggle 2xT4 default
+  gradient_accumulation_steps: 8
+  learning_rate: 2e-4
+  epochs: 1
+
+sft_local:                                # Override for local 2x24GB
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+
+rl:
+  per_device_train_batch_size: 2          # Kaggle 2xT4 default (GRPO group size = 8, batch size = 1)
+  gradient_accumulation_steps: 8
+  learning_rate: 5e-6
+  total_steps: 500
+  group_size: 4
+  max_new_tokens: 256
+
+rl_local:                                 # Override for local 2x24GB
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4

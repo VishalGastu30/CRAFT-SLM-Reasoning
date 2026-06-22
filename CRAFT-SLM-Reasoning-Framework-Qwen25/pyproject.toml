@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "craft-slm"
+version = "1.0.0"
+description = "Curriculum-guided Reinforced Adaptive Fine-Tuning for Small Language Models"
+authors = [{name = "Team Aurvion"}]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.35.0",
+    "datasets>=2.14.0",
+    "accelerate>=0.24.0",
+    "peft>=0.6.0",
+    "trl>=0.7.0",
+    "bitsandbytes>=0.41.0",
+    "loguru>=0.7.0",
+    "pyyaml>=6.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "llama-cpp-python>=0.3.0",
+    "psutil>=5.9.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "pandas>=2.0.0",
+    "tqdm>=4.65.0",
+    "sentencepiece>=0.1.99",
+    "protobuf>=3.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+]
+
+[project.scripts]
+craft = "craft.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["craft*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"

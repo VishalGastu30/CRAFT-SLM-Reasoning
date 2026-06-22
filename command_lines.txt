@@ -1,0 +1,76 @@
+python -m craft --help
+usage: python -m craft [-h] [--version] {info,doctor,probe,sft,rl,diagnostics,evaluate,quantize,package,deploy,report,run-all,checkpoints,clean,config} ...
+
+CRAFT - Curriculum-guided Reinforced Adaptive Fine-Tuning for SLMs
+
+positional arguments:
+  {info,doctor,probe,sft,rl,diagnostics,evaluate,quantize,package,deploy,report,run-all,checkpoints,clean,config}
+                        Available commands
+    info                Show framework information
+    doctor              Validate installation and hardware
+    probe               Phase 0: Run difficulty probing
+    sft                 Phase 1: Run Supervised Fine-Tuning
+    rl                  Phase 2: Run Reinforcement Learning
+    diagnostics         Run diagnostics
+    evaluate            Evaluate model
+    quantize            Quantize model to GGUF
+    package             Package model for deployment
+    deploy              Deploy model
+    report              Generate benchmark report
+    run-all             Run complete pipeline
+    checkpoints         List checkpoints
+    clean               Clean temporary files
+    config              Print current configuration
+
+options:
+  -h, --help            show this help message and exit
+  --version, -v         Show version and exit
+  --hardware            To use the local hardware (local_2x24gb)
+
+Use 'python -m craft <command> --help' for more information.
+
+
+Commands for Phi-3-mini:
+python -m craft info
+python -m craft doctor
+
+python -m craft probe --output Output/difficulty_map.json
+
+python -m craft sft --hardware local_2x24gb
+python -m craft sft --hardware local_2x24gb --resume
+
+python -m craft rl --hardware local_2x24gb --checkpoint checkpoints/sft/final
+python -m craft rl --hardware local_2x24gb --resume
+
+python -m craft evaluate --sft --output evaluation_results/sft_result.json
+python -m craft evaluate --output evaluation_results/baseline_qwen.json
+python -m craft evaluate --checkpoint checkpoints/rl/checkpoint-50 --output evaluation_results/checkpoint-50_result.json     
+
+python -m craft quantize --checkpoint checkpoints/rl/checkpoint-150
+python -m craft package
+python -m craft deploy
+
+
+Commands for Qwen-2.5:
+python -m craft info
+python -m craft doctor
+
+python -m craft probe --output Output/difficulty_map.json
+
+python -m craft sft --config qwen25_7b --hardware local_2x24gb
+python -m craft sft --config qwen25_7b --hardware local_2x24gb --resume
+
+python -m craft rl --config qwen25_7b --hardware local_2x24gb --checkpoint checkpoints/sft/final
+python -m craft rl --config qwen25_7b --hardware local_2x24gb --resume
+
+python -m craft evaluate --sft --output evaluation_results/sft_result.json
+python -m craft evaluate --checkpoint Qwen/Qwen2.5-7B-Instruct --output evaluation_results/baseline_qwen.json
+python -m craft evaluate --checkpoint checkpoints/rl/checkpoint-50 --output evaluation_results/checkpoint-50_result.json     
+
+python -m craft quantize --base-model Qwen/Qwen2.5-7B-Instruct --checkpoint checkpoints/rl/checkpoint-500
+python -m craft package
+
+python -m craft deploy
+or
+cd craft_delivery
+.\launch.bat

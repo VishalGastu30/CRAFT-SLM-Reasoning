@@ -1,0 +1,32 @@
+{
+  "gsm8k": {
+    "checkpoint": "craft",
+    "dataset": "gsm8k",
+    "accuracy": 0.65,
+    "accuracy_pct": 65.0,
+    "format_compliance": 0.96,
+    "avg_steps": 2.08,
+    "correct_count": 65,
+    "sample_count": 100
+  },
+  "strategyqa": {
+    "checkpoint": "craft",
+    "dataset": "strategyqa",
+    "accuracy": 0.64,
+    "accuracy_pct": 64.0,
+    "format_compliance": 1.0,
+    "avg_steps": 3.29,
+    "correct_count": 64,
+    "sample_count": 100
+  },
+  "mmlu": {
+    "checkpoint": "craft",
+    "dataset": "mmlu",
+    "accuracy": 0.62,
+    "accuracy_pct": 62.0,
+    "format_compliance": 0.95,
+    "avg_steps": 3.1,
+    "correct_count": 62,
+    "sample_count": 100
+  }
+}
